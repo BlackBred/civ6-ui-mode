@@ -339,17 +339,16 @@ local function DiplomacyIsOpen()
 	return view ~= nil and not view:IsHidden();
 end
 
+-- Layout offsets rather than screen position: the column slides in from the left when the screen opens.
 local function LeftColumnEdge()
 	local edge = 0;
 	pcall(function()
 		local container = ContextPtr:LookUpControl("/InGame/DiplomacyActionView/PlayerContainer");
-		if container == nil or container:IsHidden() then return end
+		if container == nil then return end
+		local base = container:GetOffsetX();
 		for _, child in ipairs(container:GetChildren()) do
-			if not child:IsHidden() then
-				local x = child:GetScreenOffset();
-				local right = x + child:GetSizeX();
-				if right > edge then edge = right end
-			end
+			local right = base + child:GetOffsetX() + child:GetSizeX();
+			if right > edge then edge = right end
 		end
 	end);
 	local screenW = UIManager:GetScreenSizeVal();
