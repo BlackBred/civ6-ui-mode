@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="f3a8c2e1-7b44-4d19-8e6a-2c91b5d04f77" version="1">
+  <Properties>
+    <Name>UI Extender</Name>
+    <Description>На экране дипломатии показывает действующие сделки с этим лидером: кто что отдаёт, что идёт сроком и что было передано сразу.</Description>
+    <Authors>UI Extender</Authors>
+    <CompatibleVersions>1.2,2.0</CompatibleVersions>
+    <AffectsSavedGames>0</AffectsSavedGames>
+    <SupportsMultiplayer>1</SupportsMultiplayer>
+  </Properties>
+  <InGameActions>
+    <UpdateText id="UIExtender_DealOverview_Text">
+      <File>Text/DealOverview_Text.xml</File>
+    </UpdateText>
+    <AddUserInterfaces id="UIExtender_DealOverview">
+      <Properties>
+        <Context>InGame</Context>
+      </Properties>
+      <File>UI/DealOverview.xml</File>
+    </AddUserInterfaces>
+  </InGameActions>
+  <Files>
+    <File>UI/DealOverview.xml</File>
+    <File>UI/DealOverview.lua</File>
+    <File>Text/DealOverview_Text.xml</File>
+  </Files>
+</Mod>

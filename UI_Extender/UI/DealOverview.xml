@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Context>
+
+	<Container ID="Root" Anchor="L,T" Offset="0,0" Size="640,300" Hidden="1" ConsumeMouse="1">
+		<Box Anchor="L,T" Size="parent,parent" Color="9,15,26,238"/>
+		<Box Anchor="L,T" Size="parent,36" Color="20,34,54,255"/>
+		<Box Anchor="L,T" Offset="0,36" Size="parent,1" Color="196,168,92,200"/>
+		<Box Anchor="L,B" Size="parent,40" Color="20,34,54,255"/>
+		<Box Anchor="L,B" Offset="0,40" Size="parent,1" Color="196,168,92,200"/>
+		<Box Anchor="L,T" Size="parent,1" Color="196,168,92,200"/>
+		<Box Anchor="L,B" Size="parent,1" Color="196,168,92,200"/>
+		<Box Anchor="L,T" Size="1,parent" Color="196,168,92,200"/>
+		<Box Anchor="R,T" Size="1,parent" Color="196,168,92,200"/>
+
+		<Label ID="Title" Anchor="L,T" Offset="12,9" Style="FontFlair16" FontStyle="shadow" Color0="236,220,176,255" Color1="0,0,0,200" SmallCaps="20" SmallCapsType="EveryWord" String="LOC_UIEXT_DEALS_TITLE"/>
+
+		<Label ID="EmptyLabel" Anchor="L,T" Offset="14,50" Style="FontNormal16" String="LOC_UIEXT_DEALS_EMPTY" Hidden="1" Color0="170,180,195,255" Color1="0,0,0,180"/>
+
+		<ScrollPanel ID="Scroll" Anchor="L,T" Offset="8,44" Size="620,200" Vertical="1" AutoScrollBar="1">
+			<Stack ID="DealStack" Anchor="L,T" Offset="0,0" StackGrowth="Down" StackPadding="8"/>
+			<ScrollBar Anchor="R,C" Offset="2,0" Size="11,parent" Style="ScrollVerticalBacking">
+				<Thumb Style="ScrollThumbAlt"/>
+			</ScrollBar>
+		</ScrollPanel>
+
+		<GridButton ID="CollapseButton" Anchor="L,B" Offset="10,7" Size="150,26" Style="ButtonControl" String="LOC_UIEXT_DEALS_COLLAPSE"/>
+	</Container>
+
+	<GridButton ID="ExpandButton" Anchor="L,T" Offset="0,0" Size="150,26" Hidden="1" Style="ButtonControl" String="LOC_UIEXT_DEALS_EXPAND"/>
+
+	<Container ID="DebugBox" Anchor="L,T" Offset="420,4" Size="900,24" Hidden="1">
+		<Box Anchor="L,T" Size="parent,parent" Color="0,0,0,200"/>
+		<Label ID="DebugLabel" Anchor="L,C" Offset="6,0" Style="FontNormal14" Color0="255,255,0,255" Color1="0,0,0,255"/>
+	</Container>
+
+	<Instance Name="DealCard">
+		<Container ID="Top" Size="600,80">
+			<Box ID="Background" Anchor="L,T" Size="parent,parent" Color="255,255,255,12"/>
+			<Box ID="TopRule" Anchor="L,T" Size="parent,1" Color="196,168,92,150"/>
+			<Label ID="Header" Anchor="L,T" Offset="10,6" Style="FontFlair14" FontStyle="shadow" Color0="236,220,176,255" Color1="0,0,0,200"/>
+			<Label ID="SharedTitle" Anchor="L,T" Style="FontNormal14" String="LOC_UIEXT_DEALS_SHARED" Color0="190,200,220,255" Color1="0,0,0,180" Hidden="1"/>
+			<Label ID="SharedBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+			<Label ID="OursTitle" Anchor="L,T" Style="FontNormal14" Color0="150,196,230,255" Color1="0,0,0,200" Hidden="1"/>
+			<Label ID="OursBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+			<Label ID="TheirsTitle" Anchor="L,T" Style="FontNormal14" Color0="230,186,130,255" Color1="0,0,0,200" Hidden="1"/>
+			<Label ID="TheirsBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+		</Container>
+	</Instance>
+
+</Context>

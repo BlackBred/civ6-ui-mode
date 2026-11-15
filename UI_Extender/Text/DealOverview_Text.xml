@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GameData>
+  <BaseGameText>
+    <Replace Tag="LOC_UIEXT_DEALS_TITLE">
+      <Text>Active deals</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_COLLAPSE">
+      <Text>Hide</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_EXPAND">
+      <Text>Deals</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_EMPTY">
+      <Text>No deals with a duration.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_WE_GIVE">
+      <Text>You give</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_THEY_GIVE">
+      <Text>{1_Leader} gives</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_LASTING">
+      <Text>For a term</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_INSTANT">
+      <Text>At once</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_SHARED">
+      <Text>Shared</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_REMAINING">
+      <Text>Turns left: {1_Turns}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_EXPIRES_NOW">
+      <Text>Ends this turn</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_OPEN_ENDED">
+      <Text>Until ended</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_MIXED">
+      <Text>Items end at different times</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ITEM_TURNS">
+      <Text>{1_Text} · {2_Turns}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GOLD_PER_TURN">
+      <Text>{1_Amount} [ICON_GOLD] per turn</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GOLD_LUMP">
+      <Text>{1_Amount} [ICON_GOLD]</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_FAVOR">
+      <Text>{1_Amount} [ICON_FAVOR]</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_CITY">
+      <Text>City: {1_Name}</Text>
+    </Replace>
+  </BaseGameText>
+  <LocalizedText>
+    <Replace Tag="LOC_UIEXT_DEALS_TITLE" Language="ru_RU">
+      <Text>Действующие сделки</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_COLLAPSE" Language="ru_RU">
+      <Text>Свернуть</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_EXPAND" Language="ru_RU">
+      <Text>Сделки</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_EMPTY" Language="ru_RU">
+      <Text>Нет сделок со сроком.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_WE_GIVE" Language="ru_RU">
+      <Text>Вы отдаёте</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_THEY_GIVE" Language="ru_RU">
+      <Text>{1_Leader} отдаёт</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_LASTING" Language="ru_RU">
+      <Text>На срок</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_INSTANT" Language="ru_RU">
+      <Text>Сразу</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_SHARED" Language="ru_RU">
+      <Text>Общее</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_REMAINING" Language="ru_RU">
+      <Text>Осталось ходов: {1_Turns}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_EXPIRES_NOW" Language="ru_RU">
+      <Text>Истекает в этом ходу</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_OPEN_ENDED" Language="ru_RU">
+      <Text>Пока не разорван</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_MIXED" Language="ru_RU">
+      <Text>Сроки у пунктов разные</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ITEM_TURNS" Language="ru_RU">
+      <Text>{1_Text} · ещё {2_Turns}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GOLD_PER_TURN" Language="ru_RU">
+      <Text>{1_Amount} [ICON_GOLD] в ход</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GOLD_LUMP" Language="ru_RU">
+      <Text>{1_Amount} [ICON_GOLD]</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_FAVOR" Language="ru_RU">
+      <Text>{1_Amount} [ICON_FAVOR]</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_CITY" Language="ru_RU">
+      <Text>Город: {1_Name}</Text>
+    </Replace>
+  </LocalizedText>
+</GameData>
