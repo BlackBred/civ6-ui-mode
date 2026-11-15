@@ -22,9 +22,14 @@ local m_CardWidth = 560;
 local m_UpdateTick = 0;
 
 -- ---------------------------------------------------------------------------
--- On-screen error line; Lua.log is not written on this build.
+-- Diagnostics: Lua.log (needs EnableTuner 1 in AppOptions.txt) plus an on-screen error line.
 -- ---------------------------------------------------------------------------
+local function Log(message)
+	print("UIExt: " .. tostring(message));
+end
+
 local function ShowError(where, err)
+	Log("ERROR " .. where .. ": " .. tostring(err));
 	pcall(function()
 		Controls.DebugLabel:SetText("UIExt " .. where .. ": " .. tostring(err));
 		Controls.DebugBox:SetHide(false);
@@ -415,9 +420,13 @@ local function RefreshUnsafe()
 	local cards = GatherDeals(LocalPlayerID(), otherID);
 	Controls.ExpandButton:SetText(Lookup("LOC_UIEXT_DEALS_EXPAND") .. ": " .. tostring(#cards));
 
+	Log("refresh player=" .. tostring(otherID) .. " civ=" .. civ .. " cards=" .. tostring(#cards));
+
 	m_DealIM:ResetInstances();
 	local leader = LeaderName(otherID);
-	for _, card in ipairs(cards) do
+	for i, card in ipairs(cards) do
+		Log(string.format("  card %d: ours=%d theirs=%d shared=%d soonest=%s",
+			i, #card.ours, #card.theirs, #card.shared, tostring(card.soonest)));
 		PopulateCard(m_DealIM:GetInstance(), card, leader);
 	end
 	Controls.DealStack:CalculateSize();
@@ -485,6 +494,7 @@ local function UpdateStep()
 	local open = DiplomacyIsOpen();
 	if open ~= m_Open then
 		m_Open = open;
+		Log("diplomacy " .. (open and "opened" or "closed") .. " player=" .. tostring(m_OtherPlayerID));
 		if open then
 			m_Expanded = true;
 			if not HasOtherPlayer() then RememberPlayerFromSession() end
@@ -522,6 +532,7 @@ local function Initialize()
 	LuaEvents.DiplomacyActionView_ShowIngameUI.Add(OnSceneClosed);
 	LuaEvents.DiploPopup_HideDeal.Add(OnDealsChanged);
 	Events.DiplomacyDealEnacted.Add(OnDealsChanged);
+	Log("initialized");
 end
 
 Try("init", Initialize);
