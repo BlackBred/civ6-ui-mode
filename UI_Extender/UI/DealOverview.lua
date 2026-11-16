@@ -6,7 +6,7 @@ ContextPtr:SetHide(false);
 local LEFT_COLUMN_FALLBACK = 578;
 local COLUMN_GAP = 6;
 local SCREEN_MARGIN = 12;
-local TOP_LIMIT_FRACTION = 0.40;
+local MAX_PANEL_FRACTION = 0.25;
 local HEADER_HEIGHT = 36;
 local FOOTER_HEIGHT = 40;
 local SCROLL_TOP = 44;
@@ -735,7 +735,7 @@ local function RefreshUnsafe()
 	Controls.EmptyLabel:SetHide(not empty);
 	Controls.Scroll:SetHide(empty);
 
-	local maxScroll = math.floor(screenH * (1 - TOP_LIMIT_FRACTION)) - SCREEN_MARGIN - SCROLL_TOP - FOOTER_HEIGHT - 8;
+	local maxScroll = math.max(ROW_HEIGHT * 4, math.floor(screenH * MAX_PANEL_FRACTION) - SCROLL_TOP - FOOTER_HEIGHT - 8);
 	local scrollH = math.min(contentH, maxScroll);
 	local panelH = SCROLL_TOP + scrollH + 8 + FOOTER_HEIGHT;
 	local top = screenH - SCREEN_MARGIN - panelH;
