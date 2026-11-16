@@ -81,6 +81,19 @@ function Control:GetSizeX() return self.w end
 function Control:GetSizeY() return self.h end
 function Control:SetSelected(v) self.selected = v and true or false end
 function Control:SetIcon(name) self.icon = name end
+function Control:SetAnchor(anchor) self.anchor = anchor end
+
+function Control:ChangeParent(parent)
+	if self.parent ~= nil then
+		local kept = {};
+		for _, child in ipairs(self.parent.children) do
+			if child ~= self then table.insert(kept, child) end
+		end
+		self.parent.children = kept;
+	end
+	self.parent = parent;
+	if parent ~= nil then table.insert(parent.children, self) end
+end
 function Control:IsSelected() return self.selected == true end
 function Control:SetWrapWidth(w) self.wrap = w end
 function Control:ReprocessAnchoring() end

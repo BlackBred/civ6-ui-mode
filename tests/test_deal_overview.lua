@@ -23,18 +23,19 @@ local function TabDeals(w, panel)
 	for _, deal in ipairs(Items(w, "DealsTabDeal", panel.TabCards)) do
 		local entry = { header = deal.Header.text, sides = {} };
 		for _, side in ipairs(Items(w, "DealsTabSide", deal.Sides)) do
-			local title = nil;
+			local title, anchor = nil, nil;
 			for _, id in ipairs({ "SharedTitle", "OursTitle", "TheirsTitle" }) do
 				if not side[id].hidden then
 					assert(title == nil, "two titles shown on one side");
 					title = side[id].text;
+					anchor = side[id].anchor;
 				end
 			end
 			local texts = {};
 			for _, item in ipairs(Items(w, "DealsTabItem", side.Items)) do
 				table.insert(texts, item.Text.text);
 			end
-			table.insert(entry.sides, { title = title, items = texts, width = side.Top.w });
+			table.insert(entry.sides, { title = title, items = texts, width = side.Top.w, anchor = anchor });
 		end
 		table.insert(deals, entry);
 	end
@@ -103,7 +104,8 @@ test("timed gold and resource deal", function(w)
 	w:OpenDiplomacy(1);
 
 	local root = w.Controls.Root;
-	check(Visible(root), "panel hidden");
+	check(root.hidden, "diplomacy panel is shown");
+	check(w.Controls.ExpandButton.hidden, "expand button is shown");
 	check(w.Controls.Title.text:find("India", 1, true), "title has no civ: " .. w.Controls.Title.text);
 	local cards = w:Cards();
 	eq(#cards, 1, "card count");
@@ -112,10 +114,6 @@ test("timed gold and resource deal", function(w)
 	eq(cards[1].TheirsTitle.text, "Gandhi gives", "theirs title");
 	eq(cards[1].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "theirs");
 	check(cards[1].SharedBody.hidden, "shared block shown for a one-sided deal");
-
-	check(root.x >= 0 and root.x + root.w <= w.screenW, string.format("panel off screen horizontally: x=%d w=%d", root.x, root.w));
-	check(root.y >= 0 and root.y + root.h <= w.screenH, string.format("panel off screen vertically: y=%d h=%d", root.y, root.h));
-	check(root.x > 560, "panel overlaps the leader column: x=" .. root.x);
 end);
 
 test("one-time items are not listed", function(w)
@@ -165,20 +163,29 @@ test("partner found from the open session when no event names it", function(w)
 	w.sessions[1] = 7;
 	w:Load();
 	w:OpenDiplomacy(nil);
-	check(Visible(w.Controls.Root), "panel hidden");
+	check(w.Controls.Root.hidden, "diplomacy panel is shown");
 	check(w.Controls.Title.text:find("India", 1, true), "title has no civ: " .. w.Controls.Title.text);
 end);
 
-test("collapse and expand", function(w)
+test("the diplomacy panel stays hidden when its buttons are clicked", function(w)
 	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
 	w:Load();
 	w:OpenDiplomacy(1);
 	w.Controls.CollapseButton:Click();
-	check(w.Controls.Root.hidden, "panel still shown after collapse");
-	check(Visible(w.Controls.ExpandButton), "expand button hidden after collapse");
-	eq(w.Controls.ExpandButton.text, "Deals: 1", "expand button");
 	w.Controls.ExpandButton:Click();
-	check(Visible(w.Controls.Root), "panel hidden after expand");
+	check(w.Controls.Root.hidden, "panel shown from the diplomacy screen");
+	check(w.Controls.ExpandButton.hidden, "expand button shown from the diplomacy screen");
+end);
+
+test("the deal list shows on the deal screen and hides when it closes", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	check(w.Controls.Root.hidden, "panel shown before the deal screen");
+	w:OpenDeal();
+	check(Visible(w.Controls.Root), "panel hidden on the deal screen");
+	w:CloseDeal();
+	check(w.Controls.Root.hidden, "panel left after the deal screen closed");
 end);
 
 test("closing diplomacy hides everything", function(w)
@@ -304,6 +311,61 @@ test("deals tab appears in the intel report when the game rebuilds the tabs", fu
 	eq(deals[1].sides[1].width, 470, "side fits the report width");
 	eq(panel.Top.w, 470, "panel fits the report width");
 	check(panel.TabEmpty.hidden, "empty label shown with a deal");
+end);
+
+test("deals tab button returns to the end when the game reattaches its tabs", function(w)
+	w:Load();
+	local report = w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local button = w:DealsTab();
+	local gameButton = Mock.NewControl({ id = "GameTab" });
+	table.insert(report.stack.children, 1, gameButton);
+	gameButton.parent = report.stack;
+	gameButton:ChangeParent(report.stack);
+	eq(report.stack.children[#report.stack.children], gameButton, "game button moved last");
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	eq(report.stack.children[#report.stack.children], button.Button, "deals button is last again");
+end);
+
+test("a wrapped title does not separate the bullets or drop a single bullet", function(w)
+	w.players[1].leader = "Cleopatra of Egypt";
+	w:AddDeal(0, 1, { Gold(1, 4, 30, 10), Silk(1, 30, 10) });
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local deal = Items(w, "DealsTabDeal", panel.TabCards)[1];
+	local side = Items(w, "DealsTabSide", deal.Sides)[1];
+	local rows = Items(w, "DealsTabItem", side.Items);
+	eq(#rows, 2, "item count");
+	eq(rows[1].Top.h, 22, "first row");
+	eq(rows[2].Top.h, 22, "second row");
+	eq(side.Items.y, 0, "bullets start at the top");
+	eq(side.Items.h, 46, "no blank row between bullets");
+	eq(side.Top.h, 46, "side is no taller than its bullets");
+	eq(side.TheirsTitle.y, 0, "title starts on the first bullet");
+	eq(side.TheirsTitle.anchor, "L,T", "title anchor");
+
+	w.deals = {};
+	w:AddDeal(0, 1, { Gold(1, 1, 30, 10) });
+	w.Events.DiplomacyDealEnacted();
+	deal = Items(w, "DealsTabDeal", panel.TabCards)[1];
+	side = Items(w, "DealsTabSide", deal.Sides)[1];
+	eq(side.Items.y, 0, "single bullet stays at the top");
+	eq(side.Items.h, 22, "single bullet row");
+	eq(side.TheirsTitle.y, 0, "title stays on that bullet");
+	check(side.Top.h > side.Items.h, "the wrapped second line has room under the bullet");
+end);
+
+test("a two-line side title stays pinned to the top of its row", function(w)
+	w:AddDeal(0, 1, { Gold(1, 3, 30, 10) });
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local deal = TabDeals(w, panel)[1];
+	eq(deal.sides[1].title, "Gandhi gives", "title");
+	eq(deal.sides[1].anchor, "L,T", "title anchor");
 end);
 
 test("deals tab is added once per rebuild, not twice", function(w)

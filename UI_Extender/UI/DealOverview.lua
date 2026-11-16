@@ -653,7 +653,7 @@ local DEALS_TAB_ICON = "ICON_UNIT_TRADER_WHITE";
 local TAB_WIDTH = 470;
 local TAB_TITLE_WRAP = 150;
 local TAB_ITEM_WRAP = 210;
-local TAB_ROW_HEIGHT = 20;
+local TAB_ROW_HEIGHT = 22;
 
 local m_TabButtonIM = nil;
 local m_TabPanelIM = nil;
@@ -694,6 +694,21 @@ local function FindReport()
 	};
 end
 
+-- ChangeParent appends, so repeating it on a control that is already last would be pointless.
+local function MoveToEnd(control, parent)
+	if control == nil or parent == nil or parent.GetChildren == nil or control.ChangeParent == nil then return end
+	local ok, children = pcall(parent.GetChildren, parent);
+	if not ok or children == nil or #children == 0 or children[#children] == control then return end
+	pcall(control.ChangeParent, control, parent);
+end
+
+local function PlaceDealsTabLast()
+	if m_Tab == nil then return end
+	MoveToEnd(m_Tab.button.Button, m_Tab.stack);
+	MoveToEnd(m_Tab.panel.Top, m_Tab.container);
+	pcall(function() m_Tab.stack:CalculateSize() end);
+end
+
 local function SyncDealsTabSelection()
 	if m_Tab == nil then return end
 	local shown = false;
@@ -706,9 +721,24 @@ local function TabTextHeight(text, width)
 	return math.max(1, math.ceil(VisibleLength(text) / perRow)) * TAB_ROW_HEIGHT;
 end
 
+-- The title is drawn over the left column, starting on the first bullet.
+-- A wrapped second line hangs under that bullet and must not push the next bullet down,
+-- and a single bullet must stay on the first line rather than sink to the last.
+local function LockTabSide(side, label, title)
+	local itemsH = side.Items:GetSizeY();
+	if itemsH < TAB_ROW_HEIGHT then itemsH = TAB_ROW_HEIGHT end
+	local titleH = TabTextHeight(title, TAB_TITLE_WRAP);
+	pcall(function() label:SetAnchor("L,T") end);
+	pcall(function() label:SetOffsetVal(60, 0) end);
+	pcall(function() side.Items:SetAnchor("L,T") end);
+	pcall(function() side.Items:SetOffsetVal(0, 0) end);
+	pcall(function() side.Items:SetSizeVal(TAB_WIDTH, itemsH) end);
+	side.Top:SetSizeVal(TAB_WIDTH, math.max(itemsH, titleH));
+end
+
 -- One block per side: label in the label column, one bulleted line per item in the value column.
 local function AddTabSide(deal, titleID, title, lines)
-	if #lines == 0 then return end
+	if #lines == 0 then return nil end
 	local side = m_TabSideIM:GetInstance(deal.Sides);
 	side.SharedTitle:SetHide(true);
 	side.OursTitle:SetHide(true);
@@ -719,22 +749,31 @@ local function AddTabSide(deal, titleID, title, lines)
 	for _, line in ipairs(lines) do
 		local item = m_TabItemIM:GetInstance(side.Items);
 		item.Text:SetText(line);
-		item.Top:SetSizeVal(TAB_WIDTH, TabTextHeight(line, TAB_ITEM_WRAP));
+		item.Top:SetSizeVal(TAB_WIDTH, TAB_ROW_HEIGHT);
 	end
 	side.Items:CalculateSize();
-	local height = math.max(TabTextHeight(title, TAB_TITLE_WRAP), side.Items:GetSizeY());
-	side.Top:SetSizeVal(TAB_WIDTH, height);
+	LockTabSide(side, label, title);
+	return { side = side, label = label, title = title };
 end
 
 local function AddTabDeal(card, leader)
 	local deal = m_TabDealIM:GetInstance(m_Tab.panel.TabCards);
 	local header, showTurns = CardTiming(card);
 	deal.Header:SetText(header);
-	AddTabSide(deal, "SharedTitle", Lookup("LOC_UIEXT_DEALS_SHARED"), LineTexts(card.shared, showTurns));
-	AddTabSide(deal, "OursTitle", Lookup("LOC_UIEXT_DEALS_WE_GIVE"), LineTexts(card.ours, showTurns));
-	AddTabSide(deal, "TheirsTitle", Format("LOC_UIEXT_DEALS_THEY_GIVE", leader), LineTexts(card.theirs, showTurns));
+	local locked = {};
+	local function add(titleID, title, lines)
+		local entry = AddTabSide(deal, titleID, title, lines);
+		if entry ~= nil then table.insert(locked, entry) end
+	end
+	add("SharedTitle", Lookup("LOC_UIEXT_DEALS_SHARED"), LineTexts(card.shared, showTurns));
+	add("OursTitle", Lookup("LOC_UIEXT_DEALS_WE_GIVE"), LineTexts(card.ours, showTurns));
+	add("TheirsTitle", Format("LOC_UIEXT_DEALS_THEY_GIVE", leader), LineTexts(card.theirs, showTurns));
 	deal.Sides:CalculateSize();
 	deal.Top:CalculateSize();
+	-- Measuring the parent can grow a side around a wrapped title. Lock the bullets back to the top.
+	for _, entry in ipairs(locked) do
+		LockTabSide(entry.side, entry.label, entry.title);
+	end
 end
 
 local function RefreshDealsTab()
@@ -812,6 +851,9 @@ local function InjectDealsTab(playerID)
 		Log("deals tab added player=" .. tostring(playerID));
 	end
 	m_Tab.playerID = playerID;
+	-- The game reattaches its own tabs with ChangeParent, which moves each of them to the
+	-- end of the stack and leaves ours at the front. Putting ours back last undoes that.
+	PlaceDealsTabLast();
 	RefreshDealsTab();
 end
 
@@ -828,6 +870,7 @@ local function SyncDealsTab()
 			InjectDealsTab(m_OtherPlayerID);
 		end
 	end
+	PlaceDealsTabLast();
 	SyncDealsTabSelection();
 end
 
@@ -887,7 +930,8 @@ local function PanelFrame()
 end
 
 local function ApplyVisibility()
-	local show = m_Open and HasOtherPlayer();
+	-- The list is only on the deal screen. The diplomacy window uses the intel-report tab.
+	local show = m_Open and HasOtherPlayer() and DealViewOpen();
 	Controls.Root:SetHide((not show) or (not m_Expanded));
 	Controls.ExpandButton:SetHide((not show) or m_Expanded);
 end
@@ -1012,6 +1056,7 @@ local function OnUpdate()
 	Try("update", UpdateStep);
 	Try("flows", UpdateResourceFlows);
 	Try("deals tab", SyncDealsTab);
+	Try("panel", ApplyVisibility);
 end
 
 -- ---------------------------------------------------------------------------
