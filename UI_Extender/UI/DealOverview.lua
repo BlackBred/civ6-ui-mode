@@ -300,6 +300,10 @@ local function FinishFlows(map)
 		end);
 		group.turns = group.partners[1].remaining;
 		group.starred = #group.partners > 1;
+		group.amount = 0;
+		for _, partner in ipairs(group.partners) do
+			group.amount = group.amount + partner.amount;
+		end
 		group.current = false;
 		for _, partner in ipairs(group.partners) do
 			if partner.current then group.current = true end
@@ -461,11 +465,13 @@ local function FillBlock(list, title, groups)
 		ApplyResourceIcon(icon.Icon, group.resource);
 		local turnsKey = group.starred and "LOC_UIEXT_FLOW_TURNS_MANY" or "LOC_UIEXT_FLOW_TURNS";
 		icon.Turns:SetText(Format(turnsKey, group.turns));
+		icon.Amount:SetText(tostring(group.amount));
 		icon.Highlight:SetHide(not group.current);
 		local tip = FlowTooltip(title, group);
 		SetTip(icon.Top, tip);
 		SetTip(icon.Icon, tip);
 		SetTip(icon.Turns, tip);
+		SetTip(icon.Amount, tip);
 		SetTip(icon.Plate, tip);
 		SetTip(icon.Frame, tip);
 		SetTip(icon.Highlight, tip);
@@ -637,6 +643,195 @@ local function PopulateCard(inst, card, leaderName)
 end
 
 -- ---------------------------------------------------------------------------
+-- Deals tab in the intel report (Доклад разведки).
+-- The DLC rebuilds that report on every player change and fires DiploScene_RefreshTabs.
+-- This context adds a button and a panel into the report's own controls, found by ID.
+-- Nothing of the game's script is replaced, so the DLC and other mods keep working.
+-- ---------------------------------------------------------------------------
+local REPORT_SEARCH_LIMIT = 4000;
+local DEALS_TAB_ICON = "ICON_UNIT_TRADER_WHITE";
+local TAB_WIDTH = 470;
+local TAB_TITLE_WRAP = 150;
+local TAB_ITEM_WRAP = 210;
+local TAB_ROW_HEIGHT = 20;
+
+local m_TabButtonIM = nil;
+local m_TabPanelIM = nil;
+local m_TabDealIM = nil;
+local m_TabSideIM = nil;
+local m_TabItemIM = nil;
+local m_Tab = nil;
+local m_TabMissLogged = false;
+
+local function FindDescendant(root, wantedID)
+	if root == nil or root.GetChildren == nil then return nil end
+	local queue = { root };
+	local head = 1;
+	while head <= #queue and head <= REPORT_SEARCH_LIMIT do
+		local node = queue[head];
+		head = head + 1;
+		if ControlID(node) == wantedID then return node end
+		local ok, children = pcall(node.GetChildren, node);
+		if ok and children ~= nil then
+			for _, child in ipairs(children) do
+				table.insert(queue, child);
+			end
+		end
+	end
+	return nil;
+end
+
+local function FindReport()
+	local view = ContextPtr:LookUpControl("/InGame/DiplomacyActionView");
+	if view == nil then return nil end
+	local stack = FindDescendant(view, "IntelTabButtonStack");
+	local container = FindDescendant(view, "IntelPanelContainer");
+	if stack == nil or container == nil then return nil end
+	return {
+		stack = stack,
+		container = container,
+		header = FindDescendant(view, "IntelHeader"),
+	};
+end
+
+local function SyncDealsTabSelection()
+	if m_Tab == nil then return end
+	local shown = false;
+	pcall(function() shown = not m_Tab.panel.Top:IsHidden() end);
+	pcall(function() m_Tab.button.Button:SetSelected(shown) end);
+end
+
+local function TabTextHeight(text, width)
+	local perRow = math.max(1, math.floor(width / CHAR_WIDTH));
+	return math.max(1, math.ceil(VisibleLength(text) / perRow)) * TAB_ROW_HEIGHT;
+end
+
+-- One block per side: label in the label column, one bulleted line per item in the value column.
+local function AddTabSide(deal, titleID, title, lines)
+	if #lines == 0 then return end
+	local side = m_TabSideIM:GetInstance(deal.Sides);
+	side.SharedTitle:SetHide(true);
+	side.OursTitle:SetHide(true);
+	side.TheirsTitle:SetHide(true);
+	local label = side[titleID];
+	label:SetText(title);
+	label:SetHide(false);
+	for _, line in ipairs(lines) do
+		local item = m_TabItemIM:GetInstance(side.Items);
+		item.Text:SetText(line);
+		item.Top:SetSizeVal(TAB_WIDTH, TabTextHeight(line, TAB_ITEM_WRAP));
+	end
+	side.Items:CalculateSize();
+	local height = math.max(TabTextHeight(title, TAB_TITLE_WRAP), side.Items:GetSizeY());
+	side.Top:SetSizeVal(TAB_WIDTH, height);
+end
+
+local function AddTabDeal(card, leader)
+	local deal = m_TabDealIM:GetInstance(m_Tab.panel.TabCards);
+	local header, showTurns = CardTiming(card);
+	deal.Header:SetText(header);
+	AddTabSide(deal, "SharedTitle", Lookup("LOC_UIEXT_DEALS_SHARED"), LineTexts(card.shared, showTurns));
+	AddTabSide(deal, "OursTitle", Lookup("LOC_UIEXT_DEALS_WE_GIVE"), LineTexts(card.ours, showTurns));
+	AddTabSide(deal, "TheirsTitle", Format("LOC_UIEXT_DEALS_THEY_GIVE", leader), LineTexts(card.theirs, showTurns));
+	deal.Sides:CalculateSize();
+	deal.Top:CalculateSize();
+end
+
+local function RefreshDealsTab()
+	if m_Tab == nil or m_Tab.playerID < 0 then return end
+	local cards = GatherDeals(LocalPlayerID(), m_Tab.playerID);
+	local leader = LeaderName(m_Tab.playerID);
+	m_TabItemIM:ResetInstances();
+	m_TabSideIM:ResetInstances();
+	m_TabDealIM:ResetInstances();
+	for _, card in ipairs(cards) do
+		AddTabDeal(card, leader);
+	end
+	local panel = m_Tab.panel;
+	panel.TabCards:CalculateSize();
+	panel.TabEmpty:SetHide(#cards > 0);
+	local height = #cards > 0 and panel.TabCards:GetSizeY() or panel.TabEmpty:GetSizeY();
+	panel.Top:SetSizeVal(TAB_WIDTH, height + 8);
+	Relayout(panel.Top);
+end
+
+local function ShowDealsTab()
+	if m_Tab == nil then return end
+	for _, child in ipairs(m_Tab.container:GetChildren()) do
+		if child ~= m_Tab.panel.Top then child:SetHide(true) end
+	end
+	m_Tab.panel.Top:SetHide(false);
+	-- The game's own buttons do not know about this one, so clear them here.
+	pcall(function()
+		for _, child in ipairs(m_Tab.stack:GetChildren()) do
+			if child ~= m_Tab.button.Button then child:SetSelected(false) end
+		end
+	end);
+	if m_Tab.header ~= nil then
+		m_Tab.header:SetText(Locale.ToUpper(Lookup("LOC_UIEXT_DEALS_REPORT")));
+	end
+	m_Tab.container:CalculateSize();
+	SyncDealsTabSelection();
+end
+
+local function InjectDealsTab(playerID)
+	if playerID == nil or playerID < 0 then return end
+	local report = FindReport();
+	if report == nil then
+		if not m_TabMissLogged then
+			m_TabMissLogged = true;
+			Log("intel report not found");
+		end
+		return;
+	end
+
+	if m_Tab == nil or m_Tab.stack ~= report.stack or m_Tab.container ~= report.container then
+		m_TabItemIM:ResetInstances();
+		m_TabSideIM:ResetInstances();
+		m_TabDealIM:ResetInstances();
+		m_TabButtonIM:ResetInstances();
+		m_TabPanelIM:ResetInstances();
+
+		local button = m_TabButtonIM:GetInstance(report.stack);
+		local panel = m_TabPanelIM:GetInstance(report.container);
+		panel.Top:SetHide(true);
+		button.ButtonIcon:SetIcon(DEALS_TAB_ICON);
+		button.Button:SetToolTipString(Lookup("LOC_UIEXT_DEALS_TAB_TOOLTIP"));
+		button.Button:RegisterCallback(Mouse.eLClick, ShowDealsTab);
+		report.stack:CalculateSize();
+
+		m_Tab = {
+			stack = report.stack,
+			container = report.container,
+			header = report.header,
+			button = button,
+			panel = panel,
+			playerID = playerID,
+		};
+		m_TabMissLogged = false;
+		Log("deals tab added player=" .. tostring(playerID));
+	end
+	m_Tab.playerID = playerID;
+	RefreshDealsTab();
+end
+
+local function OnRefreshTabs(playerID)
+	Try("deals tab", InjectDealsTab, playerID);
+end
+
+-- Runs from the update tick: adds the tab if the game rebuilt the report without an event,
+-- and keeps the button highlight in step with the panel.
+local function SyncDealsTab()
+	if m_Open and HasOtherPlayer() then
+		local report = FindReport();
+		if report ~= nil and (m_Tab == nil or m_Tab.stack ~= report.stack) then
+			InjectDealsTab(m_OtherPlayerID);
+		end
+	end
+	SyncDealsTabSelection();
+end
+
+-- ---------------------------------------------------------------------------
 -- Diplomacy screen
 -- ---------------------------------------------------------------------------
 local function DiplomacyIsOpen()
@@ -761,6 +956,7 @@ local function Hide()
 	Controls.Root:SetHide(true);
 	Controls.ExpandButton:SetHide(true);
 	UpdateResourceFlows();
+	m_Tab = nil;
 end
 
 -- ---------------------------------------------------------------------------
@@ -786,6 +982,7 @@ end
 
 local function OnDealsChanged()
 	if m_Open then Refresh() end
+	Try("deals tab", RefreshDealsTab);
 end
 
 -- Visibility follows the diplomacy screen itself, so no event can leave the panel on the map.
@@ -814,6 +1011,7 @@ local function OnUpdate()
 	m_UpdateTick = 0;
 	Try("update", UpdateStep);
 	Try("flows", UpdateResourceFlows);
+	Try("deals tab", SyncDealsTab);
 end
 
 -- ---------------------------------------------------------------------------
@@ -821,6 +1019,11 @@ local function Initialize()
 	m_DealIM = InstanceManager:new("DealCard", "Top", Controls.DealStack);
 	m_FlowBlockIM = InstanceManager:new("FlowBlock", "Top", Controls.FlowHost);
 	m_FlowIconIM = InstanceManager:new("FlowIcon", "Top", Controls.FlowHost);
+	m_TabButtonIM = InstanceManager:new("DealsTabButton", "Button", Controls.FlowHost);
+	m_TabPanelIM = InstanceManager:new("DealsTabPanel", "Top", Controls.FlowHost);
+	m_TabDealIM = InstanceManager:new("DealsTabDeal", "Top", Controls.FlowHost);
+	m_TabSideIM = InstanceManager:new("DealsTabSide", "Top", Controls.FlowHost);
+	m_TabItemIM = InstanceManager:new("DealsTabItem", "Top", Controls.FlowHost);
 	ContextPtr:SetUpdate(OnUpdate);
 
 	Controls.CollapseButton:RegisterCallback(Mouse.eLClick, OnToggle);
@@ -834,6 +1037,7 @@ local function Initialize()
 	LuaEvents.DiplomacyActionView_ShowIngameUI.Add(OnSceneClosed);
 	LuaEvents.DiploPopup_HideDeal.Add(OnDealsChanged);
 	Events.DiplomacyDealEnacted.Add(OnDealsChanged);
+	LuaEvents.DiploScene_RefreshTabs.Add(OnRefreshTabs);
 	Log("initialized");
 end
 

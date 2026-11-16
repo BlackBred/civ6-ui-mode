@@ -62,7 +62,55 @@
 			<Box ID="Highlight" Anchor="L,T" Size="50,50" Color="212,176,92,255" Hidden="1"/>
 			<Box ID="Plate" Anchor="L,T" Offset="3,3" Size="44,44" Color="14,18,26,245"/>
 			<Image ID="Icon" Anchor="L,T" Offset="4,4" Size="42,42"/>
-			<Label ID="Turns" Anchor="R,B" Offset="1,0" Style="FontNormalBold14" FontStyle="Stroke" Color0="255,255,255,255" Color1="0,0,0,255"/>
+			<Label ID="Turns" Anchor="R,T" Offset="2,1" Style="FontNormalBold14" FontStyle="Stroke" Color0="255,255,255,255" Color1="0,0,0,255"/>
+			<Label ID="Amount" Anchor="R,B" Offset="2,0" Style="FontNormalBold14" FontStyle="Stroke" Color0="255,255,255,255" Color1="0,0,0,255"/>
+		</Container>
+	</Instance>
+
+	<!-- Intel report tab button: copy of the game's IntelTabButtonInstance. -->
+	<Instance Name="DealsTabButton">
+		<Button ID="Button" Size="40,40" Texture="LaunchBar_Hook_ButtonSmall.dds" Style="ButtonDisabledText">
+			<Image ID="ButtonIcon" Anchor="C,C" Size="22,22" IconSize="22" Icon="ICON_UNIT_TRADER_WHITE"/>
+		</Button>
+	</Instance>
+
+	<!-- Deals tab body. Columns follow the overview rows: icon at 20, label at 60, bullet at 220, value at 250. -->
+	<Instance Name="DealsTabPanel">
+		<Container ID="Top" Size="470,40">
+			<Stack ID="TabCards" Anchor="L,T" Offset="0,0" StackGrowth="Down" StackPadding="0"/>
+			<Container ID="TabEmpty" Size="470,38" Hidden="1">
+				<Image Offset="20,10" Size="22,22" IconSize="22" Icon="ICON_UNIT_TRADER_WHITE"/>
+				<Label Offset="60,10" Style="FontNormal16" String="LOC_UIEXT_DEALS_EMPTY"/>
+			</Container>
+		</Container>
+	</Instance>
+
+	<Instance Name="DealsTabDeal">
+		<Stack ID="Top" StackGrowth="Down" StackPadding="4">
+			<Container ID="HeaderRow" Size="470,34">
+				<Image Offset="20,10" Size="22,22" IconSize="22" Icon="ICON_UNIT_TRADER_WHITE"/>
+				<Label ID="Header" Offset="60,12" Style="FontNormal16" Color0="236,220,176,255" Color1="0,0,0,200"/>
+			</Container>
+			<Stack ID="Sides" StackGrowth="Down" StackPadding="8"/>
+			<Container ID="Divider" Size="470,10">
+				<Box Anchor="C,B" Size="450,1" Color="255,255,255,80"/>
+			</Container>
+		</Stack>
+	</Instance>
+
+	<Instance Name="DealsTabSide">
+		<Container ID="Top" Size="470,20">
+			<Label ID="SharedTitle" Offset="60,0" Style="FontNormal16" WrapWidth="150" Color0="190,200,220,255" Hidden="1" String="LOC_UIEXT_DEALS_SHARED"/>
+			<Label ID="OursTitle" Offset="60,0" Style="FontNormal16" WrapWidth="150" Color0="150,196,230,255" Hidden="1"/>
+			<Label ID="TheirsTitle" Offset="60,0" Style="FontNormal16" WrapWidth="150" Color0="230,186,130,255" Hidden="1"/>
+			<Stack ID="Items" StackGrowth="Down" StackPadding="4"/>
+		</Container>
+	</Instance>
+
+	<Instance Name="DealsTabItem">
+		<Container ID="Top" Size="470,20">
+			<Image Offset="220,2" Size="16,16" IconSize="16" Icon="ICON_STATS_GENERIC_MODIFIER"/>
+			<Label ID="Text" Offset="250,0" Style="FontNormal16" WrapWidth="210"/>
 		</Container>
 	</Instance>
 

@@ -7,6 +7,40 @@ local Mock = require("mock_civ6");
 local tests = {};
 local function test(name, fn) table.insert(tests, { name = name, fn = fn }) end
 
+local function Items(w, name, parent)
+	local list = {};
+	local im = w:Manager(name);
+	if im == nil then return list end
+	for _, inst in ipairs(im.items) do
+		if inst.Top.parent == parent then table.insert(list, inst) end
+	end
+	return list;
+end
+
+-- What the deals tab shows: { header, sides = { { title, items = { text, ... } } } } per deal.
+local function TabDeals(w, panel)
+	local deals = {};
+	for _, deal in ipairs(Items(w, "DealsTabDeal", panel.TabCards)) do
+		local entry = { header = deal.Header.text, sides = {} };
+		for _, side in ipairs(Items(w, "DealsTabSide", deal.Sides)) do
+			local title = nil;
+			for _, id in ipairs({ "SharedTitle", "OursTitle", "TheirsTitle" }) do
+				if not side[id].hidden then
+					assert(title == nil, "two titles shown on one side");
+					title = side[id].text;
+				end
+			end
+			local texts = {};
+			for _, item in ipairs(Items(w, "DealsTabItem", side.Items)) do
+				table.insert(texts, item.Text.text);
+			end
+			table.insert(entry.sides, { title = title, items = texts, width = side.Top.w });
+		end
+		table.insert(deals, entry);
+	end
+	return deals;
+end
+
 local function eq(actual, expected, what)
 	if actual ~= expected then
 		error(string.format("%s\n    expected: %s\n    actual:   %s", what or "values differ", tostring(expected), tostring(actual)), 2);
@@ -177,6 +211,7 @@ test("luxury export to the open leader shows the turns and a gold frame", functi
 	local icons = w:FlowIcons();
 	eq(#icons, 1, "icon count");
 	eq(icons[1].Turns.text, "20", "turns");
+	eq(icons[1].Amount.text, "1", "amount");
 	check(icons[1].Highlight.hidden == false, "current leader not highlighted");
 	local tip = icons[1].Top.tooltip;
 	check(tip:find("Silk", 1, true) ~= nil, "tooltip resource: " .. tostring(tip));
@@ -195,6 +230,7 @@ test("several partners show the soonest turn and a star", function(w)
 	local icons = w:FlowIcons();
 	eq(#icons, 1, "icon count");
 	eq(icons[1].Turns.text, "15*", "soonest turns");
+	eq(icons[1].Amount.text, "2", "summed amount");
 	check(icons[1].Highlight.hidden == false, "open leader not highlighted");
 	local tip = icons[1].Top.tooltip;
 	check(tip:find("Cleopatra · 1 · 15", 1, true) ~= nil, "soonest partner: " .. tostring(tip));
@@ -216,9 +252,11 @@ test("import and export are separate blocks", function(w)
 	eq(blocks[2].Title.text, "Export", "second block");
 	local icons = w:FlowIcons();
 	eq(icons[1].Turns.text, "28", "import turns");
+	eq(icons[1].Amount.text, "1", "import amount");
 	check(icons[1].Highlight.hidden == false, "import from the open leader");
 	check(icons[1].Top.tooltip:find("Import", 1, true) ~= nil, "import heading");
 	eq(icons[2].Turns.text, "26", "export turns");
+	eq(icons[2].Amount.text, "1", "export amount");
 	check(icons[2].Highlight.hidden, "export to someone else is highlighted");
 	check(icons[2].Top.tooltip:find("Cleopatra · 1 · 26", 1, true) ~= nil, "export tooltip: " .. tostring(icons[2].Top.tooltip));
 end);
@@ -244,6 +282,146 @@ test("closing the deal screen removes import and export", function(w)
 	eq(#w.luxuryList.children, 2, "luxury list children");
 end);
 
+test("deals tab appears in the intel report when the game rebuilds the tabs", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10), Silk(1, 30, 10) });
+	w:Load();
+	local report = w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+
+	local button, panel = w:DealsTab();
+	eq(button.Button.parent, report.stack, "button parent");
+	eq(button.ButtonIcon.icon, "ICON_UNIT_TRADER_WHITE", "button icon");
+	check(panel.Top.hidden, "panel shown before click");
+	eq(panel.Top.parent, report.container, "panel parent");
+	local deals = TabDeals(w, panel);
+	eq(#deals, 1, "deal count");
+	eq(deals[1].header, "Turns left: 20", "header");
+	eq(#deals[1].sides, 2, "side count");
+	eq(deals[1].sides[1].title, "You give", "ours title");
+	eq(table.concat(deals[1].sides[1].items, "|"), "5 [ICON_GOLD] per turn", "ours");
+	eq(deals[1].sides[2].title, "Gandhi gives", "theirs title");
+	eq(table.concat(deals[1].sides[2].items, "|"), "1 [ICON_RESOURCE_SILK] Silk", "theirs");
+	eq(deals[1].sides[1].width, 470, "side fits the report width");
+	eq(panel.Top.w, 470, "panel fits the report width");
+	check(panel.TabEmpty.hidden, "empty label shown with a deal");
+end);
+
+test("deals tab is added once per rebuild, not twice", function(w)
+	w:Load();
+	local report = w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	eq(#report.stack.children, 1, "buttons in the same report");
+
+	-- The game destroys the old report when it rebuilds, so it is gone from the tree.
+	w.view.children = {};
+	local newer = w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	eq(#newer.stack.children, 1, "buttons in the rebuilt report");
+	eq(#report.stack.children, 0, "old report no longer holds the button");
+end);
+
+test("deals tab is added from the update tick when no event arrives", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	local report = w:IntelReport();
+	w:OpenDiplomacy(1);
+	local button, panel = w:DealsTab();
+	eq(button.Button.parent, report.stack, "button parent");
+	eq(#panel.TabCards.children, 1, "card count");
+end);
+
+test("clicking the deals tab shows its panel and hides the game's panel", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	local report = w:IntelReport();
+	local other = Mock.NewControl({ id = "OtherTab" });
+	other.selected = true;
+	table.insert(report.stack.children, other);
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local button, panel = w:DealsTab();
+
+	button.Button:Click();
+	check(not panel.Top.hidden, "deals panel still hidden after click");
+	check(report.gamePanel.hidden, "game panel still shown after click");
+	eq(report.header.text, "INTEL REPORT: DEALS", "header");
+	check(button.Button:IsSelected(), "deals button not selected");
+	check(not other.selected, "other tab button still selected");
+end);
+
+test("deals button highlight follows the panel", function(w)
+	w:Load();
+	local report = w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local button, panel = w:DealsTab();
+	w:OpenDiplomacy(1);
+
+	button.Button:Click();
+	w:Tick(10);
+	check(button.Button:IsSelected(), "highlight off while the panel is open");
+
+	-- The game's own tab takes over: it hides every other panel, including ours.
+	for _, child in ipairs(report.container.children) do
+		child:SetHide(child ~= report.gamePanel);
+	end
+	report.gamePanel:SetHide(false);
+	w:Tick(10);
+	check(not button.Button:IsSelected(), "highlight stays on after another tab is clicked");
+end);
+
+test("deals tab updates when a deal is enacted", function(w)
+	w:Load();
+	local report = w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	eq(#panel.TabCards.children, 0, "card count before");
+	check(not panel.TabEmpty.hidden, "empty label hidden without deals");
+
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w.Events.DiplomacyDealEnacted();
+	eq(#panel.TabCards.children, 1, "card count after");
+	check(panel.TabEmpty.hidden, "empty label shown with a deal");
+	eq(TabDeals(w, panel)[1].header, "Turns left: 20", "header");
+end);
+
+test("deals tab shows a shared alliance and per-line turns", function(w)
+	w:AddDeal(0, 1, { Alliance(0), Alliance(1), Gold(0, 5, 30, 10), Silk(1, 10, 15) });
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local deal = TabDeals(w, panel)[1];
+	eq(deal.header, "Items end at different times", "header");
+	eq(deal.sides[1].title, "Shared", "shared title");
+	eq(table.concat(deal.sides[1].items, "|"), "Alliance · Until ended", "shared");
+	eq(table.concat(deal.sides[2].items, "|"), "5 [ICON_GOLD] per turn · 20", "ours");
+	eq(table.concat(deal.sides[3].items, "|"), "1 [ICON_RESOURCE_SILK] Silk · 5", "theirs");
+end);
+
+test("reused side blocks show only their own title", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	w.deals = {};
+	w:AddDeal(0, 1, { Gold(1, 3, 30, 10) });
+	w.Events.DiplomacyDealEnacted();
+	local _, panel = w:DealsTab();
+	local deal = TabDeals(w, panel)[1];
+	eq(#deal.sides, 1, "side count");
+	eq(deal.sides[1].title, "Gandhi gives", "title");
+end);
+
+test("deals tab says when there is nothing lasting", function(w)
+	w:AddDeal(0, 1, { Gold(0, 100, 0) });
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	eq(#panel.TabCards.children, 0, "card count");
+	check(not panel.TabEmpty.hidden, "empty label hidden");
+end);
+
 test("failing deal API leaves the luxury list untouched", function(w)
 	w.failDeals = true;
 	w:Load();
@@ -266,6 +444,17 @@ local function StaticTests()
 		for tag in Mock.ReadFile(MOD_DIR .. file):gmatch("LOC_UIEXT_[%w_]+") do
 			if english[tag] == nil then table.insert(failures, file .. " uses undefined " .. tag) end
 		end
+	end
+	-- The tab is added next to the game's report tabs, not by replacing the diplomacy script.
+	local overlay = Mock.ReadFile(MOD_DIR .. "/UI/DealOverview.lua");
+	for _, needle in ipairs({ "DiploScene_RefreshTabs", "IntelTabButtonStack", "IntelPanelContainer", "DealsTabButton" }) do
+		if overlay:find(needle, 1, true) == nil then
+			table.insert(failures, "deals tab missing " .. needle);
+		end
+	end
+	local modinfo = Mock.ReadFile(MOD_DIR .. "/UI_Extender.modinfo");
+	if modinfo:find("ReplaceUIScript", 1, true) ~= nil then
+		table.insert(failures, "modinfo replaces the diplomacy script again");
 	end
 	for path in Mock.ReadFile(MOD_DIR .. "/UI_Extender.modinfo"):gmatch("<File>(.-)</File>") do
 		local f = io.open(MOD_DIR .. "/" .. path, "r");

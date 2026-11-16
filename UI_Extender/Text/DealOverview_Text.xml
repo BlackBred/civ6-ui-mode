@@ -4,6 +4,12 @@
     <Replace Tag="LOC_UIEXT_DEALS_TITLE">
       <Text>Active deals</Text>
     </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_REPORT">
+      <Text>Intel Report: Deals</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_TAB_TOOLTIP">
+      <Text>Active deals with this leader.</Text>
+    </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_COLLAPSE">
       <Text>Hide</Text>
     </Replace>
@@ -74,6 +80,12 @@
   <LocalizedText>
     <Replace Tag="LOC_UIEXT_DEALS_TITLE" Language="ru_RU">
       <Text>Действующие сделки</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_REPORT" Language="ru_RU">
+      <Text>Доклад разведки: сделки</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_TAB_TOOLTIP" Language="ru_RU">
+      <Text>Действующие сделки с этим лидером.</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_COLLAPSE" Language="ru_RU">
       <Text>Свернуть</Text>

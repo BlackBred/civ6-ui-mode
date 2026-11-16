@@ -63,6 +63,8 @@ local function NewControl(spec)
 	}, Control);
 end
 
+M.NewControl = NewControl;
+
 function Control:SetHide(v) self.hidden = v and true or false end
 function Control:IsHidden() return self.hidden end
 function Control:SetText(t)
@@ -77,6 +79,9 @@ function Control:SetSizeVal(w, h) self.w, self.h = w, h end
 function Control:SetSizeX(w) self.w = w end
 function Control:GetSizeX() return self.w end
 function Control:GetSizeY() return self.h end
+function Control:SetSelected(v) self.selected = v and true or false end
+function Control:SetIcon(name) self.icon = name end
+function Control:IsSelected() return self.selected == true end
 function Control:SetWrapWidth(w) self.wrap = w end
 function Control:ReprocessAnchoring() end
 function Control:CalculateInternalSize() end
@@ -329,7 +334,10 @@ function World:Environment()
 			end,
 		},
 		UIManager = { GetScreenSizeVal = function() return w.screenW, w.screenH end },
-		Locale = { Lookup = function(key, ...) return w:Lookup(key, ...) end },
+		Locale = {
+			Lookup = function(key, ...) return w:Lookup(key, ...) end,
+			ToUpper = function(s) return string.upper(s) end,
+		},
 		Game = {
 			GetLocalPlayer = function() return w.localPlayer end,
 			GetCurrentGameTurn = function() return w.turn end,
@@ -422,6 +430,29 @@ function World:Cards()
 	local im = self:Manager("DealCard");
 	assert(im ~= nil, "DealCard manager missing");
 	return im.items;
+end
+
+-- Builds the intel report the game makes for a diplomacy partner: tab buttons, panel container, header.
+function World:IntelReport()
+	local stack = M.NewControl({ id = "IntelTabButtonStack" });
+	local container = M.NewControl({ id = "IntelPanelContainer" });
+	container.w = 500;
+	local header = M.NewControl({ id = "IntelHeader" });
+	local game = M.NewControl({ id = "IntelPanel" });
+	local gamePanel = M.NewControl({ id = "OverviewPanel" });
+	table.insert(container.children, gamePanel);
+	table.insert(game.children, stack);
+	table.insert(game.children, container);
+	table.insert(game.children, header);
+	table.insert(self.view.children, game);
+	return { stack = stack, container = container, header = header, gamePanel = gamePanel };
+end
+
+function World:DealsTab()
+	local button = self:Manager("DealsTabButton");
+	local panel = self:Manager("DealsTabPanel");
+	assert(button ~= nil and panel ~= nil, "deals tab managers missing");
+	return button.items[1], panel.items[1];
 end
 
 function World:FlowBlocks()
