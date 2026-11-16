@@ -15,11 +15,16 @@ local ROW_HEIGHT = 22;
 local CHAR_WIDTH = 9;
 
 local m_DealIM = nil;
+local m_FlowBlockIM = nil;
+local m_FlowIconIM = nil;
 local m_Open = false;
 local m_Expanded = true;
 local m_OtherPlayerID = -1;
 local m_CardWidth = 560;
 local m_UpdateTick = 0;
+local m_FlowSignature = "";
+local m_FlowAttached = nil;
+local m_FlowMissLogged = false;
 
 -- ---------------------------------------------------------------------------
 -- Diagnostics: Lua.log (needs EnableTuner 1 in AppOptions.txt) plus an on-screen error line.
@@ -72,6 +77,10 @@ local function LocalPlayerID()
 	local id = Game.GetLocalPlayer();
 	if id == nil or id < 0 then return -1 end
 	return id;
+end
+
+local function HasOtherPlayer()
+	return m_OtherPlayerID >= 0 and m_OtherPlayerID ~= LocalPlayerID();
 end
 
 local function LeaderName(playerID)
@@ -231,6 +240,297 @@ local function GatherDeals(localID, otherID)
 	return cards;
 end
 
+-- ---------------------------------------------------------------------------
+-- Import and export in the luxury list on the deal screen.
+-- One icon per resource and direction. The number on the icon is the soonest
+-- remaining turn count; a star means that count is the smallest of several deals.
+-- A gold frame marks a deal with the leader who is open now.
+-- ---------------------------------------------------------------------------
+local FLOW_PER_ROW = 4;
+
+local function ControlID(control)
+	if control == nil or control.GetID == nil then return "" end
+	local ok, id = pcall(control.GetID, control);
+	if ok and id ~= nil then return id end
+	return "";
+end
+
+local function ControlText(control)
+	if control == nil or control.GetText == nil then return "" end
+	local ok, text = pcall(control.GetText, control);
+	if ok and text ~= nil then return text end
+	return "";
+end
+
+local function ChildByID(control, id)
+	if control == nil or control.GetChildren == nil then return nil end
+	local ok, children = pcall(control.GetChildren, control);
+	if not ok or children == nil then return nil end
+	for _, child in ipairs(children) do
+		if ControlID(child) == id then return child end
+	end
+	return nil;
+end
+
+-- Unknown structure counts as "has children", so a failed lookup cannot hide the vanilla list.
+local function HasVisibleChildren(control)
+	if control == nil or control.GetChildren == nil then return true end
+	local ok, children = pcall(control.GetChildren, control);
+	if not ok or children == nil then return true end
+	for _, child in ipairs(children) do
+		if child.IsHidden == nil or not child:IsHidden() then return true end
+	end
+	return false;
+end
+
+local function LuxuryResource(valueType)
+	if GameInfo == nil or GameInfo.Resources == nil or valueType == nil then return nil end
+	local resource = GameInfo.Resources[valueType];
+	if resource == nil or resource.ResourceClassType ~= "RESOURCECLASS_LUXURY" then return nil end
+	return resource;
+end
+
+local function FinishFlows(map)
+	local list = {};
+	for _, group in pairs(map) do
+		table.sort(group.partners, function(a, b)
+			if a.remaining ~= b.remaining then return a.remaining < b.remaining end
+			if a.name ~= b.name then return a.name < b.name end
+			return a.playerID < b.playerID;
+		end);
+		group.turns = group.partners[1].remaining;
+		group.starred = #group.partners > 1;
+		group.current = false;
+		for _, partner in ipairs(group.partners) do
+			if partner.current then group.current = true end
+		end
+		table.insert(list, group);
+	end
+	table.sort(list, function(a, b)
+		if a.turns ~= b.turns then return a.turns < b.turns end
+		return Lookup(a.resource.Name) < Lookup(b.resource.Name);
+	end);
+	return list;
+end
+
+local function CollectFlows(localID, currentID)
+	local buckets = { import = {}, export = {} };
+	if DealManager == nil or PlayerManager == nil or localID < 0 then return {}, {} end
+	local ok, majors = pcall(PlayerManager.GetAliveMajors);
+	if not ok or majors == nil then return {}, {} end
+	for _, other in ipairs(majors) do
+		local otherID = other:GetID();
+		if otherID ~= localID then
+			local got, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
+			if got and deals ~= nil then
+				for _, deal in ipairs(deals) do
+					local iok, iter, state, first = pcall(deal.Items, deal);
+					if iok and iter ~= nil then
+						for item in iter, state, first do
+							if ItemKind(Call(item, "GetType")) == "RESOURCES" then
+								local duration = Call(item, "GetDuration") or 0;
+								local resource = LuxuryResource(Call(item, "GetValueType"));
+								local fromPlayer = Call(item, "GetFromPlayerID");
+								if duration > 0 and resource ~= nil and fromPlayer ~= nil then
+									local remaining = RemainingTurns(item, duration);
+									if remaining ~= nil then
+										local direction = fromPlayer == localID and "export" or "import";
+										local valueType = Call(item, "GetValueType");
+										local group = buckets[direction][valueType];
+										if group == nil then
+											group = { resource = resource, partners = {} };
+											buckets[direction][valueType] = group;
+										end
+										table.insert(group.partners, {
+											playerID = otherID,
+											name = LeaderName(otherID),
+											amount = Call(item, "GetAmount") or 0,
+											remaining = remaining,
+											current = otherID == currentID,
+										});
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	return FinishFlows(buckets.import), FinishFlows(buckets.export);
+end
+
+local function FlowSignature(importList, exportList)
+	local parts = {};
+	local function add(direction, list)
+		for _, group in ipairs(list) do
+			local bits = { direction, tostring(group.resource.ResourceType), tostring(group.turns), group.starred and "*" or "" };
+			for _, partner in ipairs(group.partners) do
+				table.insert(bits, table.concat({
+					tostring(partner.playerID), tostring(partner.remaining), tostring(partner.amount), partner.current and "!" or "",
+				}, ":"));
+			end
+			table.insert(parts, table.concat(bits, ","));
+		end
+	end
+	add("import", importList);
+	add("export", exportList);
+	return table.concat(parts, "|");
+end
+
+local function FlowTooltip(heading, group)
+	local lines = { heading, Lookup(group.resource.Name) };
+	for _, partner in ipairs(group.partners) do
+		local line = Format("LOC_UIEXT_FLOW_PARTNER", partner.name, partner.amount, partner.remaining);
+		if partner.current then
+			line = "[COLOR_Gold]" .. line .. "[ENDCOLOR]";
+		end
+		table.insert(lines, line);
+	end
+	return table.concat(lines, "[NEWLINE]");
+end
+
+local function SetTip(control, text)
+	if control ~= nil and control.SetToolTipString ~= nil then
+		pcall(control.SetToolTipString, control, text);
+	end
+end
+
+local function ApplyResourceIcon(image, resource)
+	if IconManager == nil or image == nil or resource == nil then return end
+	local ok, x, y, sheet, size = pcall(IconManager.FindIconAtlasNearestSize, IconManager, "ICON_" .. resource.ResourceType, 42, true);
+	if not ok or sheet == nil or sheet == "" then return end
+	pcall(function() image:SetTexture(x, y, sheet) end);
+	if type(size) == "number" and size > 0 then
+		pcall(function() image:SetSizeVal(size, size) end);
+	end
+end
+
+local function DealViewOpen()
+	local view = ContextPtr:LookUpControl("/InGame/DiplomacyDealView");
+	return view ~= nil and view.IsHidden ~= nil and not view:IsHidden();
+end
+
+local function FindLuxuryList()
+	local stack = ContextPtr:LookUpControl("/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack");
+	if stack == nil or stack.GetChildren == nil then return nil end
+	local ok, groups = pcall(stack.GetChildren, stack);
+	if not ok or groups == nil then return nil end
+	local want = Lookup("LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES");
+	for _, group in ipairs(groups) do
+		local label = ChildByID(ChildByID(group, "Title"), "TitleText");
+		if label ~= nil and ControlText(label) == want then return group end
+	end
+	return nil;
+end
+
+local function ClearFlows()
+	if m_FlowIconIM ~= nil then m_FlowIconIM:ResetInstances() end
+	if m_FlowBlockIM ~= nil then m_FlowBlockIM:ResetInstances() end
+end
+
+local function Relayout(control)
+	local current = control;
+	for _ = 1, 4 do
+		if current == nil then return end
+		pcall(function() current:CalculateSize() end);
+		pcall(function() current:ReprocessAnchoring() end);
+		pcall(function() current:CalculateInternalSize() end);
+		if current.GetParent == nil then return end
+		local ok, parent = pcall(current.GetParent, current);
+		if not ok then return end
+		current = parent;
+	end
+end
+
+local function ApplyGroupVisibility(list, hasFlows)
+	if hasFlows then
+		list:SetHide(false);
+		return;
+	end
+	if not HasVisibleChildren(ChildByID(list, "ListStack")) then
+		list:SetHide(true);
+	end
+end
+
+local function FillBlock(list, title, groups)
+	local block = m_FlowBlockIM:GetInstance(list);
+	block.Title:SetText(title);
+	for _, group in ipairs(groups) do
+		local icon = m_FlowIconIM:GetInstance(block.Icons);
+		ApplyResourceIcon(icon.Icon, group.resource);
+		local turnsKey = group.starred and "LOC_UIEXT_FLOW_TURNS_MANY" or "LOC_UIEXT_FLOW_TURNS";
+		icon.Turns:SetText(Format(turnsKey, group.turns));
+		icon.Highlight:SetHide(not group.current);
+		local tip = FlowTooltip(title, group);
+		SetTip(icon.Top, tip);
+		SetTip(icon.Icon, tip);
+		SetTip(icon.Turns, tip);
+		SetTip(icon.Plate, tip);
+		SetTip(icon.Frame, tip);
+		SetTip(icon.Highlight, tip);
+		if icon.Top.SetConsumeMouse ~= nil then
+			pcall(icon.Top.SetConsumeMouse, icon.Top, true);
+		end
+	end
+	pcall(function() block.Icons:CalculateSize() end);
+	pcall(function() block.Top:CalculateSize() end);
+	local rows = math.ceil(#groups / FLOW_PER_ROW);
+	if rows < 1 then rows = 1 end
+	local want = 22 + rows * 54;
+	if block.Top:GetSizeY() < want then
+		block.Top:SetSizeVal(236, want);
+	end
+end
+
+local function UpdateResourceFlows()
+	if m_FlowBlockIM == nil then return end
+	if not (m_Open and HasOtherPlayer() and DealViewOpen()) then
+		if m_FlowSignature ~= "" or m_FlowAttached ~= nil then
+			m_FlowSignature = "";
+			m_FlowAttached = nil;
+			ClearFlows();
+		end
+		return;
+	end
+
+	local importList, exportList = CollectFlows(LocalPlayerID(), m_OtherPlayerID);
+	local signature = FlowSignature(importList, exportList);
+	local list = FindLuxuryList();
+	if list == nil then
+		if not m_FlowMissLogged then
+			m_FlowMissLogged = true;
+			Log("luxury list not found");
+		end
+		if m_FlowSignature ~= "" or m_FlowAttached ~= nil then
+			m_FlowSignature = "";
+			m_FlowAttached = nil;
+			ClearFlows();
+		end
+		return;
+	end
+
+	if signature == m_FlowSignature and m_FlowAttached == list then
+		local wasHidden = list:IsHidden();
+		ApplyGroupVisibility(list, signature ~= "");
+		if wasHidden and not list:IsHidden() then Relayout(list) end
+		return;
+	end
+
+	ClearFlows();
+	if #importList > 0 then
+		FillBlock(list, Lookup("LOC_UIEXT_FLOW_IMPORT"), importList);
+	end
+	if #exportList > 0 then
+		FillBlock(list, Lookup("LOC_UIEXT_FLOW_EXPORT"), exportList);
+	end
+	ApplyGroupVisibility(list, signature ~= "");
+	Relayout(list);
+	m_FlowSignature = signature;
+	m_FlowAttached = list;
+	Log("flows import=" .. tostring(#importList) .. " export=" .. tostring(#exportList));
+end
+
 -- Header text and whether each line needs its own turn count.
 local function CardTiming(card)
 	local turns = nil;
@@ -380,10 +680,6 @@ local function RememberPlayerFromSession()
 	end
 end
 
-local function HasOtherPlayer()
-	return m_OtherPlayerID >= 0 and m_OtherPlayerID ~= LocalPlayerID();
-end
-
 -- ---------------------------------------------------------------------------
 -- Panel
 -- ---------------------------------------------------------------------------
@@ -404,6 +700,7 @@ end
 local function RefreshUnsafe()
 	if not (m_Open and HasOtherPlayer()) then
 		ApplyVisibility();
+		UpdateResourceFlows();
 		return;
 	end
 
@@ -453,6 +750,7 @@ local function RefreshUnsafe()
 	Controls.ExpandButton:SetOffsetVal(left + 10, screenH - SCREEN_MARGIN - FOOTER_HEIGHT + 7);
 
 	ApplyVisibility();
+	UpdateResourceFlows();
 end
 
 local function Refresh()
@@ -462,6 +760,7 @@ end
 local function Hide()
 	Controls.Root:SetHide(true);
 	Controls.ExpandButton:SetHide(true);
+	UpdateResourceFlows();
 end
 
 -- ---------------------------------------------------------------------------
@@ -514,11 +813,14 @@ local function OnUpdate()
 	if m_UpdateTick < 5 then return end
 	m_UpdateTick = 0;
 	Try("update", UpdateStep);
+	Try("flows", UpdateResourceFlows);
 end
 
 -- ---------------------------------------------------------------------------
 local function Initialize()
 	m_DealIM = InstanceManager:new("DealCard", "Top", Controls.DealStack);
+	m_FlowBlockIM = InstanceManager:new("FlowBlock", "Top", Controls.FlowHost);
+	m_FlowIconIM = InstanceManager:new("FlowIcon", "Top", Controls.FlowHost);
 	ContextPtr:SetUpdate(OnUpdate);
 
 	Controls.CollapseButton:RegisterCallback(Mouse.eLClick, OnToggle);

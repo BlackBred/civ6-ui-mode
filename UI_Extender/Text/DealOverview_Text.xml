@@ -55,6 +55,21 @@
     <Replace Tag="LOC_UIEXT_DEALS_CITY">
       <Text>City: {1_Name}</Text>
     </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_IMPORT">
+      <Text>Import</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_EXPORT">
+      <Text>Export</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_TURNS">
+      <Text>{1_Turns}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_TURNS_MANY">
+      <Text>{1_Turns}*</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_PARTNER">
+      <Text>{1_Name} · {2_Amount} · {3_Turns} turns left</Text>
+    </Replace>
   </BaseGameText>
   <LocalizedText>
     <Replace Tag="LOC_UIEXT_DEALS_TITLE" Language="ru_RU">
@@ -110,6 +125,21 @@
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_CITY" Language="ru_RU">
       <Text>Город: {1_Name}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_IMPORT" Language="ru_RU">
+      <Text>Импорт</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_EXPORT" Language="ru_RU">
+      <Text>Экспорт</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_TURNS" Language="ru_RU">
+      <Text>{1_Turns}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_TURNS_MANY" Language="ru_RU">
+      <Text>{1_Turns}*</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_FLOW_PARTNER" Language="ru_RU">
+      <Text>{1_Name} · {2_Amount} · ещё {3_Turns}</Text>
     </Replace>
   </LocalizedText>
 </GameData>

@@ -82,6 +82,9 @@ function Control:ReprocessAnchoring() end
 function Control:CalculateInternalSize() end
 function Control:GetChildren() return self.children end
 function Control:RegisterCallback(event, fn) self.callbacks[event] = fn end
+function Control:GetID() return self.id end
+function Control:GetParent() return self.parent end
+function Control:SetToolTipString(text) self.tooltip = tostring(text or "") end
 
 function Control:CalculateSize()
 	local h, n = 0, 0;
@@ -178,11 +181,35 @@ function M.new(opts)
 	local column = NewControl({ id = "LeaderColumn" });
 	column.w = 560;
 	table.insert(w.playerContainer.children, column);
+
+	w.dealView = NewControl({ id = "DiplomacyDealView", hidden = true });
+	w.inventoryScroll = NewControl({ id = "MyInventoryScroll" });
+	w.inventoryStack = NewControl({ id = "MyInventoryStack" });
+	w.luxuryList = NewControl({ id = "List" });
+	w.luxuryTitle = NewControl({ id = "Title" });
+	w.luxuryTitleText = NewControl({ id = "TitleText" });
+	w.luxuryListStack = NewControl({ id = "ListStack" });
+	w.luxuryTitleText.parent = w.luxuryTitle;
+	w.luxuryTitle.parent = w.luxuryList;
+	w.luxuryListStack.parent = w.luxuryList;
+	w.luxuryList.parent = w.inventoryStack;
+	w.inventoryStack.parent = w.inventoryScroll;
+	w.inventoryScroll.parent = w.dealView;
+	table.insert(w.luxuryTitle.children, w.luxuryTitleText);
+	table.insert(w.luxuryList.children, w.luxuryTitle);
+	table.insert(w.luxuryList.children, w.luxuryListStack);
+	table.insert(w.inventoryStack.children, w.luxuryList);
+	table.insert(w.dealView.children, w.inventoryScroll);
 	return w;
 end
 
-function World:AddResource(index, resourceType, name)
-	self.resources[index] = { Index = index, ResourceType = resourceType, Name = "LOC_" .. resourceType .. "_NAME" };
+function World:AddResource(index, resourceType, name, className)
+	self.resources[index] = {
+		Index = index,
+		ResourceType = resourceType,
+		Name = "LOC_" .. resourceType .. "_NAME",
+		ResourceClassType = className or "RESOURCECLASS_LUXURY",
+	};
 	self.gameText["LOC_" .. resourceType .. "_NAME"] = name;
 end
 
@@ -240,19 +267,33 @@ function World:Environment()
 	InstanceManager.__index = InstanceManager;
 	function InstanceManager:new(name, rootID, parent)
 		local specs = assert(w.instanceSpecs[name], "no <Instance Name=\"" .. tostring(name) .. "\">");
-		local im = setmetatable({ specs = specs, root = rootID, parent = parent, items = {} }, InstanceManager);
+		local im = setmetatable({ name = name, specs = specs, root = rootID, parent = parent, items = {} }, InstanceManager);
 		table.insert(w.managers, im);
 		return im;
 	end
-	function InstanceManager:GetInstance()
+	function InstanceManager:GetInstance(parent)
+		parent = parent or self.parent;
 		local inst = ControlSet(self.specs, "instance");
-		inst[self.root].hidden = false;
-		table.insert(self.parent.children, inst[self.root]);
+		local root = inst[self.root];
+		root.hidden = false;
+		root.parent = parent;
+		table.insert(parent.children, root);
 		table.insert(self.items, inst);
 		return inst;
 	end
 	function InstanceManager:ResetInstances()
-		self.parent.children = {};
+		for _, inst in ipairs(self.items) do
+			local root = inst[self.root];
+			root.hidden = true;
+			local parent = root.parent;
+			if parent ~= nil then
+				local kept = {};
+				for _, child in ipairs(parent.children) do
+					if child ~= root then table.insert(kept, child) end
+				end
+				parent.children = kept;
+			end
+		end
 		self.items = {};
 	end
 
@@ -282,6 +323,8 @@ function World:Environment()
 			LookUpControl = function(_, path)
 				if path == "/InGame/DiplomacyActionView" then return w.view end
 				if path == "/InGame/DiplomacyActionView/PlayerContainer" then return w.playerContainer end
+				if path == "/InGame/DiplomacyDealView" then return w.dealView end
+				if path == "/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack" then return w.inventoryStack end
 				return nil;
 			end,
 		},
@@ -354,9 +397,41 @@ function World:CloseDiplomacy()
 	self:Tick();
 end
 
+function World:OpenDeal()
+	if self.gameText["LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES"] == nil then
+		self.gameText["LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES"] = "Luxury Resources";
+	end
+	self.luxuryTitleText.text = self:Lookup("LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES");
+	self.dealView.hidden = false;
+	self:Tick();
+end
+
+function World:CloseDeal()
+	self.dealView.hidden = true;
+	self:Tick();
+end
+
+function World:Manager(name)
+	for _, im in ipairs(self.managers) do
+		if im.name == name then return im end
+	end
+	return nil;
+end
+
 function World:Cards()
-	assert(#self.managers == 1, "expected one InstanceManager, got " .. #self.managers);
-	return self.managers[1].items;
+	local im = self:Manager("DealCard");
+	assert(im ~= nil, "DealCard manager missing");
+	return im.items;
+end
+
+function World:FlowBlocks()
+	local im = self:Manager("FlowBlock");
+	return im and im.items or {};
+end
+
+function World:FlowIcons()
+	local im = self:Manager("FlowIcon");
+	return im and im.items or {};
 end
 
 function World:Errors()

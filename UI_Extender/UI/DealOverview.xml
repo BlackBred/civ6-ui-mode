@@ -28,6 +28,8 @@
 
 	<GridButton ID="ExpandButton" Anchor="L,T" Offset="0,0" Size="150,26" Hidden="1" Style="ButtonControl" String="LOC_UIEXT_DEALS_EXPAND"/>
 
+	<Container ID="FlowHost" Hidden="1"/>
+
 	<Container ID="DebugBox" Anchor="L,T" Offset="420,4" Size="900,24" Hidden="1">
 		<Box Anchor="L,T" Size="parent,parent" Color="0,0,0,200"/>
 		<Label ID="DebugLabel" Anchor="L,C" Offset="6,0" Style="FontNormal14" Color0="255,255,0,255" Color1="0,0,0,255"/>
@@ -44,6 +46,23 @@
 			<Label ID="OursBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
 			<Label ID="TheirsTitle" Anchor="L,T" Style="FontNormal14" Color0="230,186,130,255" Color1="0,0,0,200" Hidden="1"/>
 			<Label ID="TheirsBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+		</Container>
+	</Instance>
+
+	<Instance Name="FlowBlock">
+		<Stack ID="Top" Anchor="L,T" Offset="2,6" Size="236,40" StackGrowth="Down" StackPadding="2">
+			<Label ID="Title" Anchor="L,T" Offset="2,0" Style="FontNormal14" FontStyle="Stroke" Color0="186,196,210,255" Color1="0,0,0,220"/>
+			<Stack ID="Icons" Anchor="L,T" StackGrowth="Right" WrapWidth="232" WrapGrowth="Down" StackPadding="4"/>
+		</Stack>
+	</Instance>
+
+	<Instance Name="FlowIcon">
+		<Container ID="Top" Size="50,54">
+			<Box ID="Frame" Anchor="L,T" Size="50,50" Color="78,86,100,255"/>
+			<Box ID="Highlight" Anchor="L,T" Size="50,50" Color="212,176,92,255" Hidden="1"/>
+			<Box ID="Plate" Anchor="L,T" Offset="3,3" Size="44,44" Color="14,18,26,245"/>
+			<Image ID="Icon" Anchor="L,T" Offset="4,4" Size="42,42"/>
+			<Label ID="Turns" Anchor="R,B" Offset="1,0" Style="FontNormalBold14" FontStyle="Stroke" Color0="255,255,255,255" Color1="0,0,0,255"/>
 		</Container>
 	</Instance>
 

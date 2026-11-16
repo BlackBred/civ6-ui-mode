@@ -23,6 +23,8 @@ local function NewWorld(opts)
 	opts.turn = opts.turn or 20;
 	local w = Mock.new(opts);
 	w:AddResource(1, "RESOURCE_SILK", "Silk");
+	w:AddResource(2, "RESOURCE_IRON", "Iron", "RESOURCECLASS_STRATEGIC");
+	w:AddResource(3, "RESOURCE_SPICES", "Spices");
 	w.gameText["LOC_DIPLOACTION_ALLIANCE_NAME"] = "Alliance";
 	return w;
 end
@@ -33,6 +35,14 @@ end
 
 local function Silk(from, duration, enacted)
 	return { type = "RESOURCES", from = from, amount = 1, duration = duration, enacted = enacted, valueType = 1 };
+end
+
+local function Spice(from, duration, enacted)
+	return { type = "RESOURCES", from = from, amount = 1, duration = duration, enacted = enacted, valueType = 3 };
+end
+
+local function Iron(from, duration, enacted)
+	return { type = "RESOURCES", from = from, amount = 2, duration = duration, enacted = enacted, valueType = 2 };
 end
 
 local function Alliance(from)
@@ -151,6 +161,96 @@ test("failing deal API does not break the panel", function(w)
 	w:Load();
 	w:OpenDiplomacy(1);
 	check(Visible(w.Controls.EmptyLabel), "empty label hidden");
+end);
+
+test("luxury export to the open leader shows the turns and a gold frame", function(w)
+	w:AddDeal(0, 1, { Silk(0, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	eq(#w:FlowBlocks(), 0, "flows shown before the deal screen");
+	w:OpenDeal();
+
+	local blocks = w:FlowBlocks();
+	eq(#blocks, 1, "block count");
+	eq(blocks[1].Title.text, "Export", "block title");
+	eq(blocks[1].Top.parent, w.luxuryList, "block parent");
+	local icons = w:FlowIcons();
+	eq(#icons, 1, "icon count");
+	eq(icons[1].Turns.text, "20", "turns");
+	check(icons[1].Highlight.hidden == false, "current leader not highlighted");
+	local tip = icons[1].Top.tooltip;
+	check(tip:find("Silk", 1, true) ~= nil, "tooltip resource: " .. tostring(tip));
+	check(tip:find("Gandhi · 1 · 20", 1, true) ~= nil, "tooltip partner: " .. tostring(tip));
+	check(tip:find("*", 1, true) == nil, "star on a single deal");
+end);
+
+test("several partners show the soonest turn and a star", function(w)
+	w.players[2] = { leader = "Cleopatra", civ = "Egypt" };
+	w:AddDeal(0, 1, { Silk(0, 30, 15) });
+	w:AddDeal(0, 2, { Silk(0, 30, 5) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+
+	local icons = w:FlowIcons();
+	eq(#icons, 1, "icon count");
+	eq(icons[1].Turns.text, "15*", "soonest turns");
+	check(icons[1].Highlight.hidden == false, "open leader not highlighted");
+	local tip = icons[1].Top.tooltip;
+	check(tip:find("Cleopatra · 1 · 15", 1, true) ~= nil, "soonest partner: " .. tostring(tip));
+	check(tip:find("[COLOR_Gold]Gandhi · 1 · 25 turns left[ENDCOLOR]", 1, true) ~= nil, "open leader: " .. tostring(tip));
+	check(tip:find("[COLOR_Gold]Cleopatra", 1, true) == nil, "other leader colored");
+end);
+
+test("import and export are separate blocks", function(w)
+	w.players[2] = { leader = "Cleopatra", civ = "Egypt" };
+	w:AddDeal(0, 1, { Silk(1, 30, 18) });
+	w:AddDeal(0, 2, { Spice(0, 30, 16) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+
+	local blocks = w:FlowBlocks();
+	eq(#blocks, 2, "block count");
+	eq(blocks[1].Title.text, "Import", "first block");
+	eq(blocks[2].Title.text, "Export", "second block");
+	local icons = w:FlowIcons();
+	eq(icons[1].Turns.text, "28", "import turns");
+	check(icons[1].Highlight.hidden == false, "import from the open leader");
+	check(icons[1].Top.tooltip:find("Import", 1, true) ~= nil, "import heading");
+	eq(icons[2].Turns.text, "26", "export turns");
+	check(icons[2].Highlight.hidden, "export to someone else is highlighted");
+	check(icons[2].Top.tooltip:find("Cleopatra · 1 · 26", 1, true) ~= nil, "export tooltip: " .. tostring(icons[2].Top.tooltip));
+end);
+
+test("strategic and one-time resources are not listed as flows", function(w)
+	w:AddDeal(0, 1, { Iron(0, 30, 10), Silk(1, 0, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	eq(#w:FlowBlocks(), 0, "block count");
+	eq(#w:FlowIcons(), 0, "icon count");
+end);
+
+test("closing the deal screen removes import and export", function(w)
+	w:AddDeal(0, 1, { Silk(0, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	eq(#w:FlowIcons(), 1, "icon count");
+	w:CloseDeal();
+	eq(#w:FlowBlocks(), 0, "blocks left after close");
+	eq(#w:FlowIcons(), 0, "icons left after close");
+	eq(#w.luxuryList.children, 2, "luxury list children");
+end);
+
+test("failing deal API leaves the luxury list untouched", function(w)
+	w.failDeals = true;
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	eq(#w:FlowBlocks(), 0, "block count");
+	eq(#w:Errors(), 0, "error count");
 end);
 
 -- ---------------------------------------------------------------------------
