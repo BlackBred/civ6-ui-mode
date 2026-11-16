@@ -201,6 +201,14 @@ function M.new(opts)
 	table.insert(w.playerContainer.children, column);
 
 	w.dealView = NewControl({ id = "DiplomacyDealView", hidden = true });
+	-- As in the game: the animated parents of the deal banner are Size="parent,parent".
+	w.tradePanelFade = NewControl({ id = "TradePanelFade" });
+	w.tradePanelSlide = NewControl({ id = "TradePanelSlide" });
+	w.tradePanelFade.w = w.screenW;
+	w.tradePanelSlide.w = w.screenW;
+	table.insert(w.tradePanelFade.children, w.tradePanelSlide);
+	table.insert(w.dealView.children, w.tradePanelFade);
+
 	w.inventoryScroll = NewControl({ id = "MyInventoryScroll" });
 	w.inventoryStack = NewControl({ id = "MyInventoryStack" });
 	w.luxuryList = NewControl({ id = "List" });

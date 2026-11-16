@@ -184,6 +184,12 @@ test("the deal list shows on the deal screen and hides when it closes", function
 	check(w.Controls.Root.hidden, "panel shown before the deal screen");
 	w:OpenDeal();
 	check(Visible(w.Controls.Root), "panel hidden on the deal screen");
+	eq(w.Controls.Root.x, 540, "panel placed right next to the trade banner (534 + 6)");
+	check(w.Controls.Root.x + w.Controls.Root.w <= w.screenW, "panel runs off the right edge");
+	w:CloseDeal();
+	w:OpenDeal();
+	check(Visible(w.Controls.Root), "panel hidden on the second deal screen");
+	eq(w.Controls.Root.x, 540, "second opening keeps the position");
 	w:CloseDeal();
 	check(w.Controls.Root.hidden, "panel left after the deal screen closed");
 end);

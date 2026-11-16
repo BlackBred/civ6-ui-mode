@@ -4,6 +4,8 @@ include("InstanceManager");
 ContextPtr:SetHide(false);
 
 local LEFT_COLUMN_FALLBACK = 578;
+local DEAL_BANNER_EDGE = 534;
+local MIN_PANEL_WIDTH = 360;
 local COLUMN_GAP = 6;
 local SCREEN_MARGIN = 12;
 local MAX_PANEL_FRACTION = 0.25;
@@ -22,6 +24,7 @@ local m_Expanded = true;
 local m_OtherPlayerID = -1;
 local m_CardWidth = 560;
 local m_UpdateTick = 0;
+local m_DealViewWasOpen = false;
 local m_FlowSignature = "";
 local m_FlowAttached = nil;
 local m_FlowMissLogged = false;
@@ -884,6 +887,10 @@ end
 
 -- Layout offsets rather than screen position: the column slides in from the left when the screen opens.
 local function LeftColumnEdge()
+	-- The deal screen banner has no ID and its animated parents span the whole screen,
+	-- so its edge comes from the game's layout: Offset 20 plus Size 514.
+	if DealViewOpen() then return DEAL_BANNER_EDGE end
+
 	local edge = 0;
 	pcall(function()
 		local container = ContextPtr:LookUpControl("/InGame/DiplomacyActionView/PlayerContainer");
@@ -924,8 +931,11 @@ end
 local function PanelFrame()
 	local screenW, screenH = UIManager:GetScreenSizeVal();
 	local left = LeftColumnEdge() + COLUMN_GAP;
+	-- Never let a bad edge push the panel off screen.
+	if left < 0 or left > screenW - SCREEN_MARGIN - MIN_PANEL_WIDTH then
+		left = math.max(0, screenW - SCREEN_MARGIN - MIN_PANEL_WIDTH);
+	end
 	local width = screenW - left - SCREEN_MARGIN;
-	if width < 360 then width = 360 end
 	return left, width, screenW, screenH;
 end
 
@@ -1054,6 +1064,13 @@ local function OnUpdate()
 	if m_UpdateTick < 5 then return end
 	m_UpdateTick = 0;
 	Try("update", UpdateStep);
+	local dealOpen = DealViewOpen();
+	if dealOpen ~= m_DealViewWasOpen then
+		m_DealViewWasOpen = dealOpen;
+		if m_Open and HasOtherPlayer() then
+			Refresh();
+		end
+	end
 	Try("flows", UpdateResourceFlows);
 	Try("deals tab", SyncDealsTab);
 	Try("panel", ApplyVisibility);
