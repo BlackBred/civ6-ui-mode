@@ -1,5 +1,6 @@
 -- Active deals panel on the diplomacy screen.
 include("InstanceManager");
+include("DealRecord");
 
 ContextPtr:SetHide(false);
 
@@ -29,6 +30,11 @@ local m_FlowSignature = "";
 local m_FlowMy = nil;
 local m_FlowTheir = nil;
 local m_FlowMissLogged = false;
+-- One-time items are already gone from DealManager when the card is drawn, so the
+-- contents of the deal table are kept while the deal screen is open (m_Watch) and,
+-- once the game reports the deal, per player pair (m_Snaps).
+local m_Snaps = {};
+local m_Watch = nil;
 
 -- ---------------------------------------------------------------------------
 -- Diagnostics: Lua.log (needs EnableTuner 1 in AppOptions.txt) plus an on-screen error line.
@@ -103,27 +109,7 @@ end
 -- Deal items
 -- ---------------------------------------------------------------------------
 local function ItemKind(rawType)
-	if DealItemTypes == nil then return "" end
-	for name, value in pairs(DealItemTypes) do
-		if value == rawType then
-			if name == "DIPLOMATIC_FAVOR" then return "FAVOR" end
-			return name;
-		end
-	end
-	return "";
-end
-
-local function AgreementIs(subType, name)
-	return DealAgreementTypes ~= nil and DealAgreementTypes[name] ~= nil and subType == DealAgreementTypes[name];
-end
-
-local function IsMutual(subType)
-	return AgreementIs(subType, "DEFENSIVE_PACT")
-		or AgreementIs(subType, "RESEARCH_AGREEMENT")
-		or AgreementIs(subType, "JOINT_WAR")
-		or AgreementIs(subType, "THIRD_PARTY_WAR")
-		or AgreementIs(subType, "MAKE_PEACE")
-		or AgreementIs(subType, "ALLIANCE");
+	return DealRecord.Kind(rawType);
 end
 
 local function RemainingTurns(item, duration)
@@ -143,71 +129,160 @@ local function RemainingTurns(item, duration)
 	return nil;
 end
 
-local function AgreementName(item, subType)
-	local nameID = Call(item, "GetSubTypeNameID");
-	if nameID ~= nil and nameID ~= "" then return Lookup(nameID) end
-	local info = GameInfo.DiplomaticActions[subType];
-	if info ~= nil then return Lookup(info.Name) end
-	return "";
+local function Shown(name)
+	if name == nil or name == "" then return "" end
+	return Lookup(name);
 end
 
-local function ItemText(item, kind, amount, subType)
+local function ItemLabel(stored)
+	local kind = stored.kind;
+	local amount = stored.amount or 0;
 	if kind == "GOLD" then
-		return Format("LOC_UIEXT_DEALS_GOLD_PER_TURN", amount);
+		if (stored.duration or 0) > 0 then
+			return Format("LOC_UIEXT_DEALS_GOLD_PER_TURN", amount);
+		end
+		return Format("LOC_UIEXT_DEALS_GOLD_LUMP", amount);
+	elseif kind == "FAVOR" then
+		return Format("LOC_UIEXT_DEALS_FAVOR", amount);
 	elseif kind == "RESOURCES" then
-		local resource = GameInfo.Resources[Call(item, "GetValueType")];
+		local resource = GameInfo ~= nil and GameInfo.Resources ~= nil and GameInfo.Resources[stored.valueType] or nil;
 		if resource ~= nil then
 			return tostring(amount) .. " [ICON_" .. resource.ResourceType .. "] " .. Lookup(resource.Name);
 		end
-		return tostring(amount) .. " " .. Lookup(Call(item, "GetValueTypeNameID"));
+		local name = Shown(stored.name);
+		if name ~= "" then return tostring(amount) .. " " .. name end
+		return tostring(amount);
 	elseif kind == "AGREEMENTS" then
-		return AgreementName(item, subType);
+		if stored.name ~= nil and stored.name ~= "" then return Lookup(stored.name) end
+		local info = GameInfo ~= nil and GameInfo.DiplomaticActions ~= nil and GameInfo.DiplomaticActions[stored.subType] or nil;
+		if info ~= nil then return Lookup(info.Name) end
+		return "";
+	elseif kind == "CITIES" then
+		local name = Shown(stored.name);
+		if name == "" then return Lookup("LOC_UIEXT_DEALS_CITY_UNNAMED") end
+		return Format("LOC_UIEXT_DEALS_CITY", name);
+	elseif kind == "GREATWORK" then
+		local name = "";
+		if GameInfo ~= nil and GameInfo.GreatWorks ~= nil then
+			local info = GameInfo.GreatWorks[stored.valueType];
+			if info ~= nil then name = Lookup(info.Name) end
+		end
+		if name == "" then name = Shown(stored.name) end
+		if name == "" then return Lookup("LOC_UIEXT_DEALS_GREAT_WORK") end
+		return Format("LOC_UIEXT_DEALS_GREAT_WORK_NAMED", name);
 	end
-	return Lookup(Call(item, "GetValueTypeNameID"));
+	return Shown(stored.name);
 end
 
--- Only lasting items: the game drops one-time items on the turn the deal is enacted.
-local function DescribeItem(item)
-	local kind = ItemKind(Call(item, "GetType"));
-	if kind ~= "GOLD" and kind ~= "RESOURCES" and kind ~= "AGREEMENTS" then return nil end
-
-	local duration = Call(item, "GetDuration") or 0;
-	local subType = Call(item, "GetSubType") or -1;
-	local isAlliance = kind == "AGREEMENTS" and AgreementIs(subType, "ALLIANCE");
-	if duration <= 0 and not isAlliance then return nil end
-
-	local fromPlayer = Call(item, "GetFromPlayerID");
-	if fromPlayer == nil then return nil end
-
-	local remaining = RemainingTurns(item, duration);
+local function EntryFor(stored, item)
+	local text = ItemLabel(stored);
+	if text == "" or stored.from == nil then return nil end
+	local instant = DealRecord.IsInstant(stored);
+	local remaining = nil;
+	if not instant and item ~= nil then
+		remaining = RemainingTurns(item, stored.duration);
+	end
 	return {
-		text = ItemText(item, kind, Call(item, "GetAmount") or 0, subType),
-		fromPlayer = fromPlayer,
+		key = DealRecord.ItemKey(stored),
+		text = text,
+		fromPlayer = stored.from,
 		remaining = remaining,
-		openEnded = remaining == nil,
-		mutual = kind == "AGREEMENTS" and IsMutual(subType),
+		openEnded = (not instant) and remaining == nil,
+		instant = instant,
+		mutual = stored.mutual and true or false,
 	};
 end
 
-local function ReadDeal(deal, localID)
-	local card = { ours = {}, theirs = {}, shared = {} };
-	local seenShared = {};
+local function AddEntry(card, entry, seen, seenShared)
+	if entry == nil or seen[entry.key] then return end
+	seen[entry.key] = true;
+	if entry.mutual then
+		if not seenShared[entry.text] then
+			seenShared[entry.text] = true;
+			table.insert(card.shared, entry);
+		end
+	elseif entry.fromPlayer == card.localID then
+		table.insert(card.ours, entry);
+	else
+		table.insert(card.theirs, entry);
+	end
+end
+
+local function ArchivedDeals()
+	if Game == nil or Game.GetProperty == nil then return {} end
+	local ok, data = pcall(Game.GetProperty, Game, DealRecord.PROP);
+	if not ok or type(data) ~= "table" or type(data.deals) ~= "table" then return {} end
+	return data.deals;
+end
+
+local function DealEnactedTurn(deal)
+	local turn = nil;
 	local ok, iter, state, first = pcall(deal.Items, deal);
-	if not ok or iter == nil then return card end
+	if not ok or iter == nil then return nil end
 	for item in iter, state, first do
-		local entry = DescribeItem(item);
-		if entry ~= nil then
-			if entry.mutual then
-				if not seenShared[entry.text] then
-					seenShared[entry.text] = true;
-					table.insert(card.shared, entry);
-				end
-			elseif entry.fromPlayer == localID then
-				table.insert(card.ours, entry);
-			else
-				table.insert(card.theirs, entry);
+		local enacted = Call(item, "GetEnactedTurn");
+		if enacted ~= nil and enacted >= 0 and (turn == nil or enacted < turn) then
+			turn = enacted;
+		end
+	end
+	return turn;
+end
+
+-- Live items, plus one-time items the game already deleted. Those come from the
+-- save, and from the snapshot taken when this player just accepted the deal.
+local function ReadDeal(deal, localID, otherID)
+	local card = { ours = {}, theirs = {}, shared = {}, localID = localID };
+	local seen = {};
+	local seenShared = {};
+	local live = {};
+	local ok, iter, state, first = pcall(deal.Items, deal);
+	if ok and iter ~= nil then
+		for item in iter, state, first do
+			local stored = DealRecord.FromItem(item);
+			if stored ~= nil then
+				table.insert(live, stored);
+				AddEntry(card, EntryFor(stored, item), seen, seenShared);
 			end
 		end
+	end
+
+	local function addInstants(items)
+		for _, stored in ipairs(items or {}) do
+			if DealRecord.IsInstant(stored) then
+				AddEntry(card, EntryFor(stored, nil), seen, seenShared);
+			end
+		end
+	end
+
+	local enacted = DealEnactedTurn(deal);
+	local dealID = Call(deal, "GetID");
+	if dealID ~= nil then
+		for _, archived in ipairs(ArchivedDeals()) do
+			if archived.id == dealID then
+				addInstants(archived.items);
+				if enacted == nil and type(archived.turn) == "number" and archived.turn > 0 then
+					enacted = archived.turn;
+				end
+				break;
+			end
+		end
+	end
+	card.turn = enacted;
+
+	local snap = otherID ~= nil and m_Snaps[DealRecord.PairKey(localID, otherID)] or nil;
+	if snap ~= nil and snap.accepted and enacted ~= nil and enacted == snap.turn and DealRecord.Covers(snap.items, live) then
+		addInstants(snap.items);
+	end
+
+	-- What was handed over at once comes first on each side, then what runs for a term.
+	for _, list in ipairs({ card.ours, card.theirs, card.shared }) do
+		local instants, lasting = {}, {};
+		for _, e in ipairs(list) do
+			table.insert(e.instant and instants or lasting, e);
+		end
+		for i = #list, 1, -1 do list[i] = nil end
+		for _, e in ipairs(instants) do table.insert(list, e) end
+		for _, e in ipairs(lasting) do table.insert(list, e) end
 	end
 	return card;
 end
@@ -230,7 +305,7 @@ local function GatherDeals(localID, otherID)
 	local ok, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
 	if not ok or deals == nil then return cards end
 	for _, deal in ipairs(deals) do
-		local card = ReadDeal(deal, localID);
+		local card = ReadDeal(deal, localID, otherID);
 		if #card.ours + #card.theirs + #card.shared > 0 then
 			card.soonest = SoonestTurns(card);
 			table.insert(cards, card);
@@ -251,6 +326,14 @@ end
 -- One icon per resource and direction. The number on the icon is the soonest
 -- remaining turn count; a star means that count is the smallest of several deals.
 -- A gold frame marks a deal with the leader in the opposite column.
+--
+-- Their import currently includes trades between two other players. That is
+-- useful and stays for now, but it may be information the local player should
+-- not have. TODO: decide whether a deal is visible only under some diplomacy
+-- condition (intel level, diplomatic visibility, an embassy, or something
+-- else). That is game logic, not a UI change.
+-- A leader the local player has not met must not be named. Trading with an
+-- unmet Cleopatra must not say "Cleopatra". Today every partner is named.
 -- ---------------------------------------------------------------------------
 local FLOW_PER_ROW = 4;
 local MY_LUXURY_STACK = "/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack";
@@ -580,7 +663,8 @@ local function UpdateResourceFlows()
 	Log("flows import=" .. tostring(#importList) .. " export=" .. tostring(#exportList) .. " theirImport=" .. tostring(#theirImport));
 end
 
--- Header text and whether each line needs its own turn count.
+-- Header text and whether each lasting line needs its own turn count.
+-- One-time items are already handed over, so they do not change the countdown.
 local function CardTiming(card)
 	local turns = nil;
 	local uniform = true;
@@ -588,7 +672,9 @@ local function CardTiming(card)
 	local anyTimed = false;
 	for _, list in ipairs({ card.ours, card.theirs, card.shared }) do
 		for _, e in ipairs(list) do
-			if e.openEnded then
+			if e.instant then
+				-- nothing to count down
+			elseif e.openEnded then
 				anyOpen = true;
 			else
 				anyTimed = true;
@@ -600,10 +686,22 @@ local function CardTiming(card)
 			end
 		end
 	end
-	if not anyTimed then return Lookup("LOC_UIEXT_DEALS_OPEN_ENDED"), false end
-	if anyOpen or not uniform then return Lookup("LOC_UIEXT_DEALS_MIXED"), true end
-	if turns <= 0 then return Lookup("LOC_UIEXT_DEALS_EXPIRES_NOW"), false end
-	return Format("LOC_UIEXT_DEALS_REMAINING", turns), false;
+	local header, showTurns;
+	if not anyTimed and not anyOpen then
+		header, showTurns = Lookup("LOC_UIEXT_DEALS_ONE_TIME_DEAL"), false;
+	elseif not anyTimed then
+		header, showTurns = Lookup("LOC_UIEXT_DEALS_OPEN_ENDED"), false;
+	elseif anyOpen or not uniform then
+		header, showTurns = Lookup("LOC_UIEXT_DEALS_MIXED"), true;
+	elseif turns <= 0 then
+		header, showTurns = Lookup("LOC_UIEXT_DEALS_EXPIRES_NOW"), false;
+	else
+		header, showTurns = Format("LOC_UIEXT_DEALS_REMAINING", turns), false;
+	end
+	if card.turn ~= nil then
+		header = header .. " · " .. Format("LOC_UIEXT_DEALS_SINCE_TURN", card.turn);
+	end
+	return header, showTurns;
 end
 
 -- ---------------------------------------------------------------------------
@@ -612,7 +710,9 @@ end
 local function LineTexts(entries, showTurns)
 	local lines = {};
 	for _, e in ipairs(entries) do
-		if showTurns and not e.openEnded then
+		if e.instant then
+			table.insert(lines, Format("LOC_UIEXT_DEALS_ITEM_ONCE", e.text));
+		elseif showTurns and not e.openEnded then
 			table.insert(lines, Format("LOC_UIEXT_DEALS_ITEM_TURNS", e.text, e.remaining));
 		elseif showTurns then
 			table.insert(lines, e.text .. " · " .. Lookup("LOC_UIEXT_DEALS_OPEN_ENDED"));
@@ -1054,6 +1154,83 @@ local function Hide()
 end
 
 -- ---------------------------------------------------------------------------
+-- What was on the deal table. The game deletes one-time items while it enacts
+-- the deal, before any event reaches this context, so the table is read while
+-- the deal screen is open. When the deal is enacted, the last contents seen are
+-- written into the save by the gameplay script.
+-- ---------------------------------------------------------------------------
+local function WorkingItems(localID, otherID)
+	if DealManager == nil or DealManager.GetWorkingDeal == nil or DealDirection == nil then return {} end
+	local function read(direction, a, b)
+		local ok, deal = pcall(DealManager.GetWorkingDeal, direction, a, b);
+		if not ok or deal == nil or deal.Items == nil then return {} end
+		local list = {};
+		local iok, iter, state, first = pcall(deal.Items, deal);
+		if not iok or iter == nil then return list end
+		for item in iter, state, first do
+			local stored = DealRecord.FromItem(item);
+			if stored ~= nil then table.insert(list, stored) end
+		end
+		return list;
+	end
+	local items = read(DealDirection.OUTGOING, localID, otherID);
+	if #items == 0 then items = read(DealDirection.INCOMING, localID, otherID) end
+	return items;
+end
+
+local function WatchDealTable()
+	if not (m_Open and HasOtherPlayer() and DealViewOpen()) then return end
+	local localID = LocalPlayerID();
+	local items = WorkingItems(localID, m_OtherPlayerID);
+	if #items == 0 then return end
+	m_Watch = {
+		key = DealRecord.PairKey(localID, m_OtherPlayerID),
+		a = localID,
+		b = m_OtherPlayerID,
+		turn = Game.GetCurrentGameTurn(),
+		items = items,
+	};
+end
+
+local function IsNetworkGame()
+	if GameConfiguration == nil or GameConfiguration.IsNetworkMultiplayer == nil then return false end
+	local ok, value = pcall(GameConfiguration.IsNetworkMultiplayer);
+	return ok and value == true;
+end
+
+local function PublishSnapshot(snap)
+	m_Snaps[snap.key] = { turn = snap.turn, items = snap.items, accepted = true };
+	local payload = {
+		a = snap.a,
+		b = snap.b,
+		turn = snap.turn,
+		accepted = 1,
+		items = DealRecord.EncodeItems(snap.items),
+	};
+	-- In a network game only the player operation may write: it runs on every machine.
+	if not IsNetworkGame() and ExposedMembers ~= nil and ExposedMembers.UIExt ~= nil and ExposedMembers.UIExt.RecordSnapshot ~= nil then
+		pcall(ExposedMembers.UIExt.RecordSnapshot, payload);
+	end
+	if UI ~= nil and UI.RequestPlayerOperation ~= nil and PlayerOperations ~= nil and PlayerOperations.EXECUTE_SCRIPT ~= nil then
+		payload.OnStart = "UIExt_OnDealSnapshot";
+		pcall(UI.RequestPlayerOperation, Game.GetLocalPlayer(), PlayerOperations.EXECUTE_SCRIPT, payload);
+	end
+	Log("snapshot " .. snap.key .. " items=" .. tostring(#snap.items));
+end
+
+local function TakeWatchFor(firstID, secondID)
+	if m_Watch == nil or firstID == nil or secondID == nil then return nil end
+	if m_Watch.key ~= DealRecord.PairKey(firstID, secondID) then return nil end
+	if m_Watch.turn ~= Game.GetCurrentGameTurn() then
+		m_Watch = nil;
+		return nil;
+	end
+	local snap = m_Watch;
+	m_Watch = nil;
+	return snap;
+end
+
+-- ---------------------------------------------------------------------------
 -- Events
 -- ---------------------------------------------------------------------------
 local function OnToggle()
@@ -1077,6 +1254,14 @@ end
 local function OnDealsChanged()
 	if m_Open then Refresh() end
 	Try("deals tab", RefreshDealsTab);
+end
+
+local function OnDealEnacted(firstID, secondID)
+	Try("snapshot", function()
+		local snap = TakeWatchFor(firstID, secondID);
+		if snap ~= nil then PublishSnapshot(snap) end
+	end);
+	OnDealsChanged();
 end
 
 -- Visibility follows the diplomacy screen itself, so no event can leave the panel on the map.
@@ -1107,10 +1292,13 @@ local function OnUpdate()
 	local dealOpen = DealViewOpen();
 	if dealOpen ~= m_DealViewWasOpen then
 		m_DealViewWasOpen = dealOpen;
+		-- A fresh negotiation: what was on the table last time is not this deal.
+		if dealOpen then m_Watch = nil end
 		if m_Open and HasOtherPlayer() then
 			Refresh();
 		end
 	end
+	Try("watch", WatchDealTable);
 	Try("flows", UpdateResourceFlows);
 	Try("deals tab", SyncDealsTab);
 	Try("panel", ApplyVisibility);
@@ -1118,6 +1306,9 @@ end
 
 -- ---------------------------------------------------------------------------
 local function Initialize()
+	if DealRecord == nil then
+		error("DealRecord.lua is not loaded: it must be listed in ImportFiles in the modinfo");
+	end
 	m_DealIM = InstanceManager:new("DealCard", "Top", Controls.DealStack);
 	m_FlowBlockIM = InstanceManager:new("FlowBlock", "Top", Controls.FlowHost);
 	m_FlowIconIM = InstanceManager:new("FlowIcon", "Top", Controls.FlowHost);
@@ -1138,7 +1329,7 @@ local function Initialize()
 	LuaEvents.DiploScene_SceneClosed.Add(OnSceneClosed);
 	LuaEvents.DiplomacyActionView_ShowIngameUI.Add(OnSceneClosed);
 	LuaEvents.DiploPopup_HideDeal.Add(OnDealsChanged);
-	Events.DiplomacyDealEnacted.Add(OnDealsChanged);
+	Events.DiplomacyDealEnacted.Add(OnDealEnacted);
 	LuaEvents.DiploScene_RefreshTabs.Add(OnRefreshTabs);
 	Log("initialized");
 end

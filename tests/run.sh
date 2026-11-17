@@ -9,9 +9,10 @@ for f in "$MOD"/UI_Extender.modinfo "$MOD"/UI/*.xml "$MOD"/Text/*.xml; do
 done
 echo "ok    xml"
 
-for f in "$MOD"/UI/*.lua; do
+for f in "$MOD"/UI/*.lua "$MOD"/Scripts/*.lua; do
 	luajit -b "$f" /dev/null
 done
 echo "ok    lua syntax"
 
 luajit tests/test_deal_overview.lua
+luajit tests/test_deal_archive.lua

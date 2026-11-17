@@ -132,21 +132,22 @@ test("timed gold and resource deal", function(w)
 	check(w.Controls.Title.text:find("India", 1, true), "title has no civ: " .. w.Controls.Title.text);
 	local cards = w:Cards();
 	eq(#cards, 1, "card count");
-	eq(cards[1].Header.text, "Turns left: 20", "header");
+	eq(cards[1].Header.text, "Turns left: 20 · since turn 10", "header");
 	eq(cards[1].OursBody.text, "5 [ICON_GOLD] per turn", "ours");
 	eq(cards[1].TheirsTitle.text, "Gandhi gives", "theirs title");
 	eq(cards[1].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "theirs");
 	check(cards[1].SharedBody.hidden, "shared block shown for a one-sided deal");
 end);
 
-test("one-time items are not listed", function(w)
+test("one-time gold still on the deal is shown", function(w)
 	w:AddDeal(0, 1, { Gold(0, 100, 0) });
 	w:Load();
 	w:OpenDiplomacy(1);
-	eq(#w:Cards(), 0, "card count");
-	check(Visible(w.Controls.EmptyLabel), "empty label hidden");
-	check(w.Controls.Scroll.hidden, "scroll shown with no deals");
-	eq(w.Controls.ExpandButton.text, "Deals: 0", "expand button");
+	local cards = w:Cards();
+	eq(#cards, 1, "card count");
+	eq(cards[1].Header.text, "One-time deal", "header");
+	eq(cards[1].OursBody.text, "100 [ICON_GOLD] · one-time", "ours");
+	check(cards[1].TheirsBody.hidden, "their side shown");
 end);
 
 test("alliance is open-ended and shown once as shared", function(w)
@@ -165,7 +166,7 @@ test("different durations show turns per line", function(w)
 	w:Load();
 	w:OpenDiplomacy(1);
 	local card = w:Cards()[1];
-	eq(card.Header.text, "Items end at different times", "header");
+	eq(card.Header.text, "Items end at different times · since turn 10", "header");
 	eq(card.OursBody.text, "5 [ICON_GOLD] per turn · 20", "ours");
 	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk · 5", "theirs");
 end);
@@ -177,8 +178,8 @@ test("cards are sorted by soonest expiry", function(w)
 	w:OpenDiplomacy(1);
 	local cards = w:Cards();
 	eq(#cards, 2, "card count");
-	eq(cards[1].Header.text, "Turns left: 3", "first card");
-	eq(cards[2].Header.text, "Turns left: 20", "second card");
+	eq(cards[1].Header.text, "Turns left: 3 · since turn 13", "first card");
+	eq(cards[2].Header.text, "Turns left: 20 · since turn 10", "second card");
 end);
 
 test("partner found from the open session when no event names it", function(w)
@@ -384,7 +385,7 @@ test("deals tab appears in the intel report when the game rebuilds the tabs", fu
 	eq(panel.Top.parent, report.container, "panel parent");
 	local deals = TabDeals(w, panel);
 	eq(#deals, 1, "deal count");
-	eq(deals[1].header, "Turns left: 20", "header");
+	eq(deals[1].header, "Turns left: 20 · since turn 10", "header");
 	eq(#deals[1].sides, 2, "side count");
 	eq(deals[1].sides[1].title, "You give", "ours title");
 	eq(table.concat(deals[1].sides[1].items, "|"), "5 [ICON_GOLD] per turn", "ours");
@@ -525,7 +526,7 @@ test("deals tab updates when a deal is enacted", function(w)
 	w.Events.DiplomacyDealEnacted();
 	eq(#panel.TabCards.children, 1, "card count after");
 	check(panel.TabEmpty.hidden, "empty label shown with a deal");
-	eq(TabDeals(w, panel)[1].header, "Turns left: 20", "header");
+	eq(TabDeals(w, panel)[1].header, "Turns left: 20 · since turn 10", "header");
 end);
 
 test("deals tab shows a shared alliance and per-line turns", function(w)
@@ -535,7 +536,7 @@ test("deals tab shows a shared alliance and per-line turns", function(w)
 	w.LuaEvents.DiploScene_RefreshTabs(1);
 	local _, panel = w:DealsTab();
 	local deal = TabDeals(w, panel)[1];
-	eq(deal.header, "Items end at different times", "header");
+	eq(deal.header, "Items end at different times · since turn 10", "header");
 	eq(deal.sides[1].title, "Shared", "shared title");
 	eq(table.concat(deal.sides[1].items, "|"), "Alliance · Until ended", "shared");
 	eq(table.concat(deal.sides[2].items, "|"), "5 [ICON_GOLD] per turn · 20", "ours");
@@ -556,14 +557,147 @@ test("reused side blocks show only their own title", function(w)
 	eq(deal.sides[1].title, "Gandhi gives", "title");
 end);
 
-test("deals tab says when there is nothing lasting", function(w)
+test("deals tab lists a one-time gold gift", function(w)
 	w:AddDeal(0, 1, { Gold(0, 100, 0) });
 	w:Load();
 	w:IntelReport();
 	w.LuaEvents.DiploScene_RefreshTabs(1);
 	local _, panel = w:DealsTab();
-	eq(#panel.TabCards.children, 0, "card count");
-	check(not panel.TabEmpty.hidden, "empty label hidden");
+	local deal = TabDeals(w, panel)[1];
+	eq(deal.header, "One-time deal", "header");
+	eq(table.concat(deal.sides[1].items, "|"), "100 [ICON_GOLD] · one-time", "ours");
+	check(panel.TabEmpty.hidden, "empty label shown");
+end);
+
+test("stripped lump gold is restored from the save", function(w)
+	w:AddDeal(0, 1, { Silk(1, 30, 10) }, 1001);
+	w:Load();
+	w.env.Game:SetProperty(w.env.DealRecord.PROP, {
+		deals = {
+			{
+				id = 1001, turn = 10, a = 0, b = 1,
+				items = {
+					{ kind = "GOLD", amount = 100, duration = 0, from = 0, valueType = -1, subType = -1, name = "", alliance = false, mutual = false },
+					{ kind = "RESOURCES", amount = 1, duration = 30, from = 1, valueType = 1, subType = -1, name = "", alliance = false, mutual = false },
+				},
+			},
+			{
+				id = 1002, turn = 4, a = 0, b = 1,
+				items = {
+					{ kind = "GOLD", amount = 7, duration = 0, from = 0, valueType = -1, subType = -1, name = "", alliance = false, mutual = false },
+				},
+			},
+		},
+		pending = {}, missed = {}, next = 0,
+	});
+	w:OpenDiplomacy(1);
+	local card = w:Cards()[1];
+	eq(#w:Cards(), 1, "expired archive deal is not a card");
+	eq(card.Header.text, "Turns left: 20 · since turn 10", "one-time gold does not change the countdown");
+	eq(card.OursBody.text, "100 [ICON_GOLD] · one-time", "lump gold");
+	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "silk");
+end);
+
+test("city, favor and a great work are shown", function(w)
+	w.greatWorks[4] = { Name = "LOC_MONA_LISA", GreatWorkType = "GREATWORK_MONA_LISA" };
+	w.gameText["LOC_MONA_LISA"] = "Mona Lisa";
+	w:AddDeal(0, 1, {
+		{ type = "DIPLOMATIC_FAVOR", from = 0, amount = 25, duration = 0 },
+		{ type = "GREATWORK", from = 0, duration = 0, valueType = 4 },
+		{ type = "CITIES", from = 1, duration = 0, name = "Delhi" },
+	});
+	w:Load();
+	w:OpenDiplomacy(1);
+	local card = w:Cards()[1];
+	eq(card.Header.text, "One-time deal", "header");
+	eq(card.OursBody.text, "25 [ICON_FAVOR] · one-time[NEWLINE]Great Work: Mona Lisa · one-time", "ours");
+	eq(card.TheirsBody.text, "City: Delhi · one-time", "theirs");
+end);
+
+-- As in DiplomacyDeals.log: the game enacts the deal, drops the one-time gold,
+-- and only then reports it. The deal table is read while the deal screen is open.
+local function AcceptGoldForSilk(w)
+	w.turn = 35;
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = { Gold(0, 100, 0), Gold(0, 10, 30), Silk(1, 30) } };
+	w:OpenDeal();
+	w.working = nil;
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 35), Silk(1, 30, 35) }, 1006);
+	w.Events.DiplomacyDealEnacted(0, 1);
+end
+
+local function StoredKinds(w)
+	local saved = w.properties["UIEXT_DEAL_ARCHIVE"];
+	local kinds = {};
+	for _, item in ipairs(saved.deals[1].items) do
+		table.insert(kinds, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
+	end
+	table.sort(kinds);
+	return #saved.deals, saved.deals[1].id, table.concat(kinds, ",");
+end
+
+test("accepting a deal keeps the lump sum that the game strips", function(w)
+	w:LoadGameplay();
+	w:Load();
+	AcceptGoldForSilk(w);
+	local count, id, kinds = StoredKinds(w);
+	eq(count, 1, "stored deals");
+	eq(id, 1006, "deal id");
+	eq(kinds, "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "stored items");
+	local card = w:Cards()[1];
+	eq(card.Header.text, "Turns left: 30 · since turn 35", "header");
+	eq(card.OursBody.text, "100 [ICON_GOLD] · one-time[NEWLINE]10 [ICON_GOLD] per turn", "ours");
+	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "theirs");
+end);
+
+test("the lump sum is stored when the interface hears of the deal first", function(w)
+	w:Load();
+	w:LoadGameplay();
+	AcceptGoldForSilk(w);
+	local count, id, kinds = StoredKinds(w);
+	eq(count, 1, "stored deals");
+	eq(id, 1006, "deal id");
+	eq(kinds, "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "stored items");
+end);
+
+test("after loading the save both views still show the lump sum", function(w)
+	w:LoadGameplay();
+	w:Load();
+	AcceptGoldForSilk(w);
+	w:CloseDeal();
+	w:CloseDiplomacy();
+	w.turn = 40;
+	w:Reload();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	local card = w:Cards()[1];
+	eq(card.Header.text, "Turns left: 25 · since turn 35", "panel header");
+	eq(card.OursBody.text, "100 [ICON_GOLD] · one-time[NEWLINE]10 [ICON_GOLD] per turn", "panel ours");
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local deal = TabDeals(w, panel)[1];
+	eq(deal.header, "Turns left: 25 · since turn 35", "tab header");
+	eq(deal.sides[1].title, "You give", "tab ours title");
+	eq(table.concat(deal.sides[1].items, "|"), "100 [ICON_GOLD] · one-time|10 [ICON_GOLD] per turn", "tab ours");
+	eq(table.concat(deal.sides[2].items, "|"), "1 [ICON_RESOURCE_SILK] Silk", "tab theirs");
+end);
+
+test("a deal table left without a deal is not attached to a later one", function(w)
+	w:LoadGameplay();
+	w:Load();
+	w.turn = 35;
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = { Gold(0, 500, 0) } };
+	w:OpenDeal();
+	w.working = nil;
+	w:CloseDeal();
+	w:OpenDeal();
+	w:AddDeal(0, 1, { Silk(1, 30, 35) }, 1007);
+	w.Events.DiplomacyDealEnacted(0, 1);
+	local _, _, kinds = StoredKinds(w);
+	eq(kinds, "RESOURCES:1:30", "stored items");
+	eq(w:Cards()[1].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "card");
 end);
 
 test("failing deal API leaves the luxury list untouched", function(w)
@@ -584,7 +718,10 @@ local function StaticTests()
 	for tag in pairs(english) do
 		if russian[tag] == nil then table.insert(failures, "no ru_RU text for " .. tag) end
 	end
-	for _, file in ipairs({ "/UI/DealOverview.lua", "/UI/DealOverview.xml" }) do
+	for _, file in ipairs({
+		"/UI/DealOverview.lua", "/UI/DealOverview.xml",
+		"/Scripts/DealArchive.lua", "/Scripts/DealRecord.lua",
+	}) do
 		for tag in Mock.ReadFile(MOD_DIR .. file):gmatch("LOC_UIEXT_[%w_]+") do
 			if english[tag] == nil then table.insert(failures, file .. " uses undefined " .. tag) end
 		end
@@ -599,6 +736,9 @@ local function StaticTests()
 	local modinfo = Mock.ReadFile(MOD_DIR .. "/UI_Extender.modinfo");
 	if modinfo:find("ReplaceUIScript", 1, true) ~= nil then
 		table.insert(failures, "modinfo replaces the diplomacy script again");
+	end
+	if modinfo:find("AddGameplayScripts", 1, true) == nil or modinfo:find("Scripts/DealArchive.lua", 1, true) == nil then
+		table.insert(failures, "modinfo does not load the deal archive");
 	end
 	for path in Mock.ReadFile(MOD_DIR .. "/UI_Extender.modinfo"):gmatch("<File>(.-)</File>") do
 		local f = io.open(MOD_DIR .. "/" .. path, "r");

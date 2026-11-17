@@ -9,6 +9,9 @@
     <SupportsMultiplayer>1</SupportsMultiplayer>
   </Properties>
   <InGameActions>
+    <ImportFiles id="UIExtender_DealRecord">
+      <File>Scripts/DealRecord.lua</File>
+    </ImportFiles>
     <UpdateText id="UIExtender_DealOverview_Text">
       <File>Text/DealOverview_Text.xml</File>
     </UpdateText>
@@ -18,10 +21,15 @@
       </Properties>
       <File>UI/DealOverview.xml</File>
     </AddUserInterfaces>
+    <AddGameplayScripts id="UIExtender_DealArchive">
+      <File>Scripts/DealArchive.lua</File>
+    </AddGameplayScripts>
   </InGameActions>
   <Files>
     <File>UI/DealOverview.xml</File>
     <File>UI/DealOverview.lua</File>
+    <File>Scripts/DealRecord.lua</File>
+    <File>Scripts/DealArchive.lua</File>
     <File>Text/DealOverview_Text.xml</File>
   </Files>
 </Mod>

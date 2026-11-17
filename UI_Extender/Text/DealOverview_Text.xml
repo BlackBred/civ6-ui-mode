@@ -17,7 +17,7 @@
       <Text>Deals</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_EMPTY">
-      <Text>No deals with a duration.</Text>
+      <Text>No active deals.</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_WE_GIVE">
       <Text>You give</Text>
@@ -49,6 +49,15 @@
     <Replace Tag="LOC_UIEXT_DEALS_ITEM_TURNS">
       <Text>{1_Text} · {2_Turns}</Text>
     </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ITEM_ONCE">
+      <Text>{1_Text} · one-time</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ONE_TIME_DEAL">
+      <Text>One-time deal</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_SINCE_TURN">
+      <Text>since turn {1_Turn}</Text>
+    </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_GOLD_PER_TURN">
       <Text>{1_Amount} [ICON_GOLD] per turn</Text>
     </Replace>
@@ -60,6 +69,15 @@
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_CITY">
       <Text>City: {1_Name}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_CITY_UNNAMED">
+      <Text>City</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GREAT_WORK">
+      <Text>Great Work</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GREAT_WORK_NAMED">
+      <Text>Great Work: {1_Name}</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_FLOW_IMPORT">
       <Text>Import</Text>
@@ -94,7 +112,7 @@
       <Text>Сделки</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_EMPTY" Language="ru_RU">
-      <Text>Нет сделок со сроком.</Text>
+      <Text>Нет действующих сделок.</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_WE_GIVE" Language="ru_RU">
       <Text>Вы отдаёте</Text>
@@ -126,6 +144,15 @@
     <Replace Tag="LOC_UIEXT_DEALS_ITEM_TURNS" Language="ru_RU">
       <Text>{1_Text} · ещё {2_Turns}</Text>
     </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ITEM_ONCE" Language="ru_RU">
+      <Text>{1_Text} · разово</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ONE_TIME_DEAL" Language="ru_RU">
+      <Text>Разовая сделка</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_SINCE_TURN" Language="ru_RU">
+      <Text>с хода {1_Turn}</Text>
+    </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_GOLD_PER_TURN" Language="ru_RU">
       <Text>{1_Amount} [ICON_GOLD] в ход</Text>
     </Replace>
@@ -137,6 +164,15 @@
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_CITY" Language="ru_RU">
       <Text>Город: {1_Name}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_CITY_UNNAMED" Language="ru_RU">
+      <Text>Город</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GREAT_WORK" Language="ru_RU">
+      <Text>Шедевр</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_GREAT_WORK_NAMED" Language="ru_RU">
+      <Text>Шедевр: {1_Name}</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_FLOW_IMPORT" Language="ru_RU">
       <Text>Импорт</Text>

@@ -186,9 +186,15 @@ function M.new(opts)
 	w.logs = {};
 	w.managers = {};
 	w.resources = {};
+	w.greatWorks = {};
 	w.actions = {};
 	w.gameText = opts.gameText or {};
 	w.failDeals = false;
+	w.properties = {};
+	w.operations = {};
+	w.exposed = {};
+	w.working = nil;
+	w.onSend = nil;
 
 	local contextSpecs, instanceSpecs = M.ParseContext(ReadFile(w.modDir .. "/UI/DealOverview.xml"));
 	w.instanceSpecs = instanceSpecs;
@@ -247,8 +253,8 @@ function World:AddResource(index, resourceType, name, className)
 end
 
 -- items: { type = "GOLD", from = 0, amount = 5, duration = 30, enacted = 10, subType = "ALLIANCE", valueType = 1, name = "LOC_..." }
-function World:AddDeal(a, b, items)
-	table.insert(self.deals, { a = a, b = b, items = items });
+function World:AddDeal(a, b, items, id)
+	table.insert(self.deals, { a = a, b = b, items = items, id = id or (1000 + #self.deals) });
 end
 
 local function NewItem(spec)
@@ -272,6 +278,7 @@ end
 
 local function NewDeal(spec)
 	local deal = {};
+	function deal:GetID() return spec.id end
 	function deal:Items()
 		local i = 0;
 		return function()
@@ -339,7 +346,23 @@ function World:Environment()
 	end
 
 	return {
-		include = function() end,
+		-- As in the game: a mod file is found by include only when the modinfo imports it.
+		-- A missing file is skipped silently, the same way the game does.
+		include = function(file)
+			if file == nil or file == "InstanceManager" then return end
+			local name = file:gsub("%.lua$", "");
+			local modinfo = ReadFile(w.modDir .. "/UI_Extender.modinfo");
+			for block in modinfo:gmatch("<ImportFiles.-</ImportFiles>") do
+				for path in block:gmatch("<File>(.-)</File>") do
+					if path:match("([^/]+)%.lua$") == name then
+						local chunk = assert(loadfile(w.modDir .. "/" .. path));
+						setfenv(chunk, getfenv(2));
+						chunk();
+						return;
+					end
+				end
+			end
+		end,
 		print = function(...)
 			local parts = {};
 			for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
@@ -370,6 +393,8 @@ function World:Environment()
 		Game = {
 			GetLocalPlayer = function() return w.localPlayer end,
 			GetCurrentGameTurn = function() return w.turn end,
+			GetProperty = function(_, key) return w.properties[key] end,
+			SetProperty = function(_, key, value) w.properties[key] = value end,
 		},
 		PlayerConfigurations = players,
 		PlayerManager = {
@@ -396,25 +421,68 @@ function World:Environment()
 				end
 				return list;
 			end,
+			GetWorkingDeal = function(_, a, b)
+				local spec = w.working;
+				if spec == nil or spec.a ~= a or spec.b ~= b then return nil end
+				return NewDeal(spec);
+			end,
+			SendWorkingDeal = function(action, a, b)
+				if w.onSend ~= nil then w.onSend(action, a, b) end
+			end,
 		},
 		UI = {
 			GetColorValue = function(r, g, b, a)
 				return string.format("%.2f,%.2f,%.2f,%.2f", r, g, b, a or 1);
 			end,
+			RequestPlayerOperation = function(player, op, params)
+				table.insert(w.operations, { player = player, op = op, params = params });
+			end,
 		},
+		PlayerOperations = { EXECUTE_SCRIPT = 1 },
+		DealDirection = { INCOMING = 0, OUTGOING = 1 },
+		DealProposalAction = { PROPOSED = 0, ACCEPTED = 1, REJECTED = 2 },
+		ExposedMembers = w.exposed,
+		GameEvents = w.GameEvents,
 		DealItemTypes = DEAL_ITEM_TYPES,
 		DealAgreementTypes = AGREEMENT_TYPES,
-		GameInfo = { Resources = w.resources, DiplomaticActions = w.actions },
+		GameInfo = { Resources = w.resources, DiplomaticActions = w.actions, GreatWorks = w.greatWorks },
 	};
 end
 
-function World:Load()
-	self.LuaEvents = EventTable();
-	self.Events = EventTable();
-	local chunk = assert(loadfile(self.modDir .. "/UI/DealOverview.lua"));
-	setfenv(chunk, setmetatable(self:Environment(), { __index = _G }));
+function World:OpenEnv(file)
+	self.LuaEvents = self.LuaEvents or EventTable();
+	self.Events = self.Events or EventTable();
+	self.GameEvents = self.GameEvents or EventTable();
+	local env = self:Environment();
+	setmetatable(env, { __index = _G });
+	local chunk = assert(loadfile(file));
+	setfenv(chunk, env);
 	chunk();
+	return env;
+end
+
+function World:Load()
+	self.env = self:OpenEnv(self.modDir .. "/UI/DealOverview.lua");
 	assert(self.update ~= nil, "mod did not call ContextPtr:SetUpdate");
+	return self;
+end
+
+-- Loading a save: Game properties survive, every Lua context and handler starts over.
+function World:Reload()
+	self.LuaEvents = nil;
+	self.Events = nil;
+	self.GameEvents = nil;
+	self.managers = {};
+	for key in pairs(self.exposed) do self.exposed[key] = nil end
+	self.update = nil;
+	self.view.hidden = true;
+	self.dealView.hidden = true;
+	self:LoadGameplay();
+	return self:Load();
+end
+
+function World:LoadGameplay()
+	self.gameplay = self:OpenEnv(self.modDir .. "/Scripts/DealArchive.lua");
 	return self;
 end
 
