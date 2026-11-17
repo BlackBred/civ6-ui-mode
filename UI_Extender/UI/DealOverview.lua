@@ -26,7 +26,8 @@ local m_CardWidth = 560;
 local m_UpdateTick = 0;
 local m_DealViewWasOpen = false;
 local m_FlowSignature = "";
-local m_FlowAttached = nil;
+local m_FlowMy = nil;
+local m_FlowTheir = nil;
 local m_FlowMissLogged = false;
 
 -- ---------------------------------------------------------------------------
@@ -244,12 +245,19 @@ local function GatherDeals(localID, otherID)
 end
 
 -- ---------------------------------------------------------------------------
--- Import and export in the luxury list on the deal screen.
+-- Import and export in the luxury lists on the deal screen.
+-- Our column shows both directions. Their column shows only import: luxuries
+-- they already buy, which are not worth offering them.
 -- One icon per resource and direction. The number on the icon is the soonest
 -- remaining turn count; a star means that count is the smallest of several deals.
--- A gold frame marks a deal with the leader who is open now.
+-- A gold frame marks a deal with the leader in the opposite column.
 -- ---------------------------------------------------------------------------
 local FLOW_PER_ROW = 4;
+local MY_LUXURY_STACK = "/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack";
+local THEIR_LUXURY_STACK = "/InGame/DiplomacyDealView/TheirInventory/TheirInventoryScroll/TheirInventoryStack";
+-- Light washes, 0–1. Obvious beside each other, not a solid plate.
+local IMPORT_TINT = { 0.25, 0.70, 0.32, 0.22 };
+local EXPORT_TINT = { 0.75, 0.22, 0.20, 0.22 };
 
 local function ControlID(control)
 	if control == nil or control.GetID == nil then return "" end
@@ -320,15 +328,15 @@ local function FinishFlows(map)
 	return list;
 end
 
-local function CollectFlows(localID, currentID)
+local function CollectFlows(subjectID, highlightID)
 	local buckets = { import = {}, export = {} };
-	if DealManager == nil or PlayerManager == nil or localID < 0 then return {}, {} end
+	if DealManager == nil or PlayerManager == nil or subjectID < 0 then return {}, {} end
 	local ok, majors = pcall(PlayerManager.GetAliveMajors);
 	if not ok or majors == nil then return {}, {} end
 	for _, other in ipairs(majors) do
 		local otherID = other:GetID();
-		if otherID ~= localID then
-			local got, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
+		if otherID ~= subjectID then
+			local got, deals = pcall(DealManager.GetPlayerDeals, subjectID, otherID);
 			if got and deals ~= nil then
 				for _, deal in ipairs(deals) do
 					local iok, iter, state, first = pcall(deal.Items, deal);
@@ -341,7 +349,7 @@ local function CollectFlows(localID, currentID)
 								if duration > 0 and resource ~= nil and fromPlayer ~= nil then
 									local remaining = RemainingTurns(item, duration);
 									if remaining ~= nil then
-										local direction = fromPlayer == localID and "export" or "import";
+										local direction = fromPlayer == subjectID and "export" or "import";
 										local valueType = Call(item, "GetValueType");
 										local group = buckets[direction][valueType];
 										if group == nil then
@@ -353,7 +361,7 @@ local function CollectFlows(localID, currentID)
 											name = LeaderName(otherID),
 											amount = Call(item, "GetAmount") or 0,
 											remaining = remaining,
-											current = otherID == currentID,
+											current = otherID == highlightID,
 										});
 									end
 								end
@@ -418,8 +426,8 @@ local function DealViewOpen()
 	return view ~= nil and view.IsHidden ~= nil and not view:IsHidden();
 end
 
-local function FindLuxuryList()
-	local stack = ContextPtr:LookUpControl("/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack");
+local function FindLuxuryList(stackPath)
+	local stack = ContextPtr:LookUpControl(stackPath);
 	if stack == nil or stack.GetChildren == nil then return nil end
 	local ok, groups = pcall(stack.GetChildren, stack);
 	if not ok or groups == nil then return nil end
@@ -460,9 +468,15 @@ local function ApplyGroupVisibility(list, hasFlows)
 	end
 end
 
-local function FillBlock(list, title, groups)
+local function ApplyTint(box, tint)
+	if box == nil or UI == nil or UI.GetColorValue == nil then return end
+	pcall(box.SetColor, box, UI.GetColorValue(tint[1], tint[2], tint[3], tint[4]));
+end
+
+local function FillBlock(list, title, groups, tint)
 	local block = m_FlowBlockIM:GetInstance(list);
 	block.Title:SetText(title);
+	ApplyTint(block.Tint, tint);
 	for _, group in ipairs(groups) do
 		local icon = m_FlowIconIM:GetInstance(block.Icons);
 		ApplyResourceIcon(icon.Icon, group.resource);
@@ -483,61 +497,87 @@ local function FillBlock(list, title, groups)
 		end
 	end
 	pcall(function() block.Icons:CalculateSize() end);
-	pcall(function() block.Top:CalculateSize() end);
+	pcall(function() block.Body:CalculateSize() end);
 	local rows = math.ceil(#groups / FLOW_PER_ROW);
 	if rows < 1 then rows = 1 end
-	local want = 22 + rows * 54;
-	if block.Top:GetSizeY() < want then
-		block.Top:SetSizeVal(236, want);
-	end
+	local height = 26 + rows * 54;
+	pcall(function()
+		local measured = block.Body:GetSizeY() + 4;
+		if measured > height then height = measured end
+	end);
+	block.Top:SetSizeVal(236, height);
+end
+
+local function KeepFlowList(list, hasFlows)
+	if list == nil then return end
+	local wasHidden = list:IsHidden();
+	ApplyGroupVisibility(list, hasFlows);
+	if wasHidden and not list:IsHidden() then Relayout(list) end
 end
 
 local function UpdateResourceFlows()
 	if m_FlowBlockIM == nil then return end
 	if not (m_Open and HasOtherPlayer() and DealViewOpen()) then
-		if m_FlowSignature ~= "" or m_FlowAttached ~= nil then
+		if m_FlowSignature ~= "" or m_FlowMy ~= nil or m_FlowTheir ~= nil then
 			m_FlowSignature = "";
-			m_FlowAttached = nil;
+			m_FlowMy = nil;
+			m_FlowTheir = nil;
 			ClearFlows();
 		end
 		return;
 	end
 
-	local importList, exportList = CollectFlows(LocalPlayerID(), m_OtherPlayerID);
-	local signature = FlowSignature(importList, exportList);
-	local list = FindLuxuryList();
-	if list == nil then
-		if not m_FlowMissLogged then
-			m_FlowMissLogged = true;
-			Log("luxury list not found");
-		end
-		if m_FlowSignature ~= "" or m_FlowAttached ~= nil then
+	local localID = LocalPlayerID();
+	local otherID = m_OtherPlayerID;
+	local importList, exportList = CollectFlows(localID, otherID);
+	local theirImport = CollectFlows(otherID, localID);
+	local signature = FlowSignature(importList, exportList) .. "||" .. FlowSignature(theirImport, {});
+	local myList = FindLuxuryList(MY_LUXURY_STACK);
+	local theirList = FindLuxuryList(THEIR_LUXURY_STACK);
+	if (myList == nil or theirList == nil) and not m_FlowMissLogged then
+		m_FlowMissLogged = true;
+		Log("luxury list missing mine=" .. tostring(myList ~= nil) .. " theirs=" .. tostring(theirList ~= nil));
+	end
+	if myList == nil and theirList == nil then
+		if m_FlowSignature ~= "" or m_FlowMy ~= nil or m_FlowTheir ~= nil then
 			m_FlowSignature = "";
-			m_FlowAttached = nil;
+			m_FlowMy = nil;
+			m_FlowTheir = nil;
 			ClearFlows();
 		end
 		return;
 	end
 
-	if signature == m_FlowSignature and m_FlowAttached == list then
-		local wasHidden = list:IsHidden();
-		ApplyGroupVisibility(list, signature ~= "");
-		if wasHidden and not list:IsHidden() then Relayout(list) end
+	local mineShown = #importList + #exportList > 0;
+	local theirsShown = #theirImport > 0;
+	if signature == m_FlowSignature and m_FlowMy == myList and m_FlowTheir == theirList then
+		KeepFlowList(myList, mineShown);
+		KeepFlowList(theirList, theirsShown);
 		return;
 	end
 
 	ClearFlows();
-	if #importList > 0 then
-		FillBlock(list, Lookup("LOC_UIEXT_FLOW_IMPORT"), importList);
+	if myList ~= nil then
+		if #importList > 0 then
+			FillBlock(myList, Lookup("LOC_UIEXT_FLOW_IMPORT"), importList, IMPORT_TINT);
+		end
+		if #exportList > 0 then
+			FillBlock(myList, Lookup("LOC_UIEXT_FLOW_EXPORT"), exportList, EXPORT_TINT);
+		end
+		ApplyGroupVisibility(myList, mineShown);
+		Relayout(myList);
 	end
-	if #exportList > 0 then
-		FillBlock(list, Lookup("LOC_UIEXT_FLOW_EXPORT"), exportList);
+	if theirList ~= nil then
+		if #theirImport > 0 then
+			FillBlock(theirList, Lookup("LOC_UIEXT_FLOW_IMPORT"), theirImport, IMPORT_TINT);
+		end
+		ApplyGroupVisibility(theirList, theirsShown);
+		Relayout(theirList);
 	end
-	ApplyGroupVisibility(list, signature ~= "");
-	Relayout(list);
 	m_FlowSignature = signature;
-	m_FlowAttached = list;
-	Log("flows import=" .. tostring(#importList) .. " export=" .. tostring(#exportList));
+	m_FlowMy = myList;
+	m_FlowTheir = theirList;
+	Log("flows import=" .. tostring(#importList) .. " export=" .. tostring(#exportList) .. " theirImport=" .. tostring(#theirImport));
 end
 
 -- Header text and whether each line needs its own turn count.

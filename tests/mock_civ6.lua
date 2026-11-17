@@ -103,6 +103,7 @@ function Control:RegisterCallback(event, fn) self.callbacks[event] = fn end
 function Control:GetID() return self.id end
 function Control:GetParent() return self.parent end
 function Control:SetToolTipString(text) self.tooltip = tostring(text or "") end
+function Control:SetColor(color) self.color = color end
 
 function Control:CalculateSize()
 	local h, n = 0, 0;
@@ -209,23 +210,29 @@ function M.new(opts)
 	table.insert(w.tradePanelFade.children, w.tradePanelSlide);
 	table.insert(w.dealView.children, w.tradePanelFade);
 
-	w.inventoryScroll = NewControl({ id = "MyInventoryScroll" });
-	w.inventoryStack = NewControl({ id = "MyInventoryStack" });
-	w.luxuryList = NewControl({ id = "List" });
-	w.luxuryTitle = NewControl({ id = "Title" });
-	w.luxuryTitleText = NewControl({ id = "TitleText" });
-	w.luxuryListStack = NewControl({ id = "ListStack" });
-	w.luxuryTitleText.parent = w.luxuryTitle;
-	w.luxuryTitle.parent = w.luxuryList;
-	w.luxuryListStack.parent = w.luxuryList;
-	w.luxuryList.parent = w.inventoryStack;
-	w.inventoryStack.parent = w.inventoryScroll;
-	w.inventoryScroll.parent = w.dealView;
-	table.insert(w.luxuryTitle.children, w.luxuryTitleText);
-	table.insert(w.luxuryList.children, w.luxuryTitle);
-	table.insert(w.luxuryList.children, w.luxuryListStack);
-	table.insert(w.inventoryStack.children, w.luxuryList);
-	table.insert(w.dealView.children, w.inventoryScroll);
+	local function LuxuryColumn(scrollID, stackID)
+		local scroll = NewControl({ id = scrollID });
+		local stack = NewControl({ id = stackID });
+		local list = NewControl({ id = "List" });
+		local title = NewControl({ id = "Title" });
+		local titleText = NewControl({ id = "TitleText" });
+		local listStack = NewControl({ id = "ListStack" });
+		titleText.parent = title;
+		title.parent = list;
+		listStack.parent = list;
+		list.parent = stack;
+		stack.parent = scroll;
+		scroll.parent = w.dealView;
+		table.insert(title.children, titleText);
+		table.insert(list.children, title);
+		table.insert(list.children, listStack);
+		table.insert(stack.children, list);
+		table.insert(w.dealView.children, scroll);
+		return stack, list, titleText;
+	end
+
+	w.inventoryStack, w.luxuryList, w.luxuryTitleText = LuxuryColumn("MyInventoryScroll", "MyInventoryStack");
+	w.theirInventoryStack, w.theirLuxuryList, w.theirLuxuryTitleText = LuxuryColumn("TheirInventoryScroll", "TheirInventoryStack");
 	return w;
 end
 
@@ -351,6 +358,7 @@ function World:Environment()
 				if path == "/InGame/DiplomacyActionView/PlayerContainer" then return w.playerContainer end
 				if path == "/InGame/DiplomacyDealView" then return w.dealView end
 				if path == "/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack" then return w.inventoryStack end
+				if path == "/InGame/DiplomacyDealView/TheirInventory/TheirInventoryScroll/TheirInventoryStack" then return w.theirInventoryStack end
 				return nil;
 			end,
 		},
@@ -387,6 +395,11 @@ function World:Environment()
 					end
 				end
 				return list;
+			end,
+		},
+		UI = {
+			GetColorValue = function(r, g, b, a)
+				return string.format("%.2f,%.2f,%.2f,%.2f", r, g, b, a or 1);
 			end,
 		},
 		DealItemTypes = DEAL_ITEM_TYPES,
@@ -431,6 +444,7 @@ function World:OpenDeal()
 		self.gameText["LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES"] = "Luxury Resources";
 	end
 	self.luxuryTitleText.text = self:Lookup("LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES");
+	self.theirLuxuryTitleText.text = self:Lookup("LOC_DIPLOMACY_DEAL_LUXURY_RESOURCES");
 	self.dealView.hidden = false;
 	self:Tick();
 end

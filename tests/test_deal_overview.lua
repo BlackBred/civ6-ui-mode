@@ -86,6 +86,29 @@ end
 
 local function Visible(c) return not c.hidden end
 
+local function BlocksOn(w, parent)
+	local list = {};
+	for _, block in ipairs(w:FlowBlocks()) do
+		if block.Top.parent == parent then table.insert(list, block) end
+	end
+	return list;
+end
+
+local function TintChannels(block)
+	local r, g, b, a = (block.Tint.color or ""):match("^([%d%.]+),([%d%.]+),([%d%.]+),([%d%.]+)$");
+	return tonumber(r), tonumber(g), tonumber(b), tonumber(a);
+end
+
+local function IsLightGreen(block, what)
+	local r, g, b, a = TintChannels(block);
+	check(r ~= nil and g > r and g > b and a > 0 and a < 0.35, (what or "import") .. " tint " .. tostring(block.Tint.color));
+end
+
+local function IsLightRed(block, what)
+	local r, g, b, a = TintChannels(block);
+	check(r ~= nil and r > g and r > b and a > 0 and a < 0.35, (what or "export") .. " tint " .. tostring(block.Tint.color));
+end
+
 -- ---------------------------------------------------------------------------
 test("loads without errors and stays hidden on the map", function(w)
 	w:Load();
@@ -217,12 +240,16 @@ test("luxury export to the open leader shows the turns and a gold frame", functi
 	eq(#w:FlowBlocks(), 0, "flows shown before the deal screen");
 	w:OpenDeal();
 
-	local blocks = w:FlowBlocks();
-	eq(#blocks, 1, "block count");
-	eq(blocks[1].Title.text, "Export", "block title");
-	eq(blocks[1].Top.parent, w.luxuryList, "block parent");
+	local mine = BlocksOn(w, w.luxuryList);
+	local theirs = BlocksOn(w, w.theirLuxuryList);
+	eq(#mine, 1, "our block count");
+	eq(mine[1].Title.text, "Export", "block title");
+	IsLightRed(mine[1], "export");
+	eq(#theirs, 1, "their block count");
+	eq(theirs[1].Title.text, "Import", "their import of the same silk");
+	IsLightGreen(theirs[1], "their import");
 	local icons = w:FlowIcons();
-	eq(#icons, 1, "icon count");
+	eq(#icons, 2, "icon count");
 	eq(icons[1].Turns.text, "20", "turns");
 	eq(icons[1].Amount.text, "1", "amount");
 	check(icons[1].Highlight.hidden == false, "current leader not highlighted");
@@ -230,6 +257,9 @@ test("luxury export to the open leader shows the turns and a gold frame", functi
 	check(tip:find("Silk", 1, true) ~= nil, "tooltip resource: " .. tostring(tip));
 	check(tip:find("Gandhi · 1 · 20", 1, true) ~= nil, "tooltip partner: " .. tostring(tip));
 	check(tip:find("*", 1, true) == nil, "star on a single deal");
+	eq(icons[2].Turns.text, "20", "their turns");
+	check(icons[2].Highlight.hidden == false, "they already buy it from us");
+	check(icons[2].Top.tooltip:find("Peter · 1 · 20", 1, true) ~= nil, "their tooltip: " .. tostring(icons[2].Top.tooltip));
 end);
 
 test("several partners show the soonest turn and a star", function(w)
@@ -240,7 +270,12 @@ test("several partners show the soonest turn and a star", function(w)
 	w:OpenDiplomacy(1);
 	w:OpenDeal();
 
-	local icons = w:FlowIcons();
+	local mine = BlocksOn(w, w.luxuryList);
+	eq(#mine, 1, "our block count");
+	local icons = {};
+	for _, icon in ipairs(w:FlowIcons()) do
+		if icon.Top.parent == mine[1].Icons then table.insert(icons, icon) end
+	end
 	eq(#icons, 1, "icon count");
 	eq(icons[1].Turns.text, "15*", "soonest turns");
 	eq(icons[1].Amount.text, "2", "summed amount");
@@ -249,6 +284,16 @@ test("several partners show the soonest turn and a star", function(w)
 	check(tip:find("Cleopatra · 1 · 15", 1, true) ~= nil, "soonest partner: " .. tostring(tip));
 	check(tip:find("[COLOR_Gold]Gandhi · 1 · 25 turns left[ENDCOLOR]", 1, true) ~= nil, "open leader: " .. tostring(tip));
 	check(tip:find("[COLOR_Gold]Cleopatra", 1, true) == nil, "other leader colored");
+
+	local theirs = BlocksOn(w, w.theirLuxuryList);
+	eq(#theirs, 1, "their import of the silk they buy from us");
+	local theirIcons = {};
+	for _, icon in ipairs(w:FlowIcons()) do
+		if icon.Top.parent == theirs[1].Icons then table.insert(theirIcons, icon) end
+	end
+	eq(#theirIcons, 1, "their icon count");
+	eq(theirIcons[1].Turns.text, "25", "one deal, no star");
+	check(theirIcons[1].Highlight.hidden == false, "bought from us");
 end);
 
 test("import and export are separate blocks", function(w)
@@ -259,10 +304,13 @@ test("import and export are separate blocks", function(w)
 	w:OpenDiplomacy(1);
 	w:OpenDeal();
 
-	local blocks = w:FlowBlocks();
-	eq(#blocks, 2, "block count");
-	eq(blocks[1].Title.text, "Import", "first block");
-	eq(blocks[2].Title.text, "Export", "second block");
+	local mine = BlocksOn(w, w.luxuryList);
+	eq(#mine, 2, "block count");
+	eq(#BlocksOn(w, w.theirLuxuryList), 0, "their import of nothing");
+	eq(mine[1].Title.text, "Import", "first block");
+	eq(mine[2].Title.text, "Export", "second block");
+	IsLightGreen(mine[1], "import");
+	IsLightRed(mine[2], "export");
 	local icons = w:FlowIcons();
 	eq(icons[1].Turns.text, "28", "import turns");
 	eq(icons[1].Amount.text, "1", "import amount");
@@ -283,16 +331,44 @@ test("strategic and one-time resources are not listed as flows", function(w)
 	eq(#w:FlowIcons(), 0, "icon count");
 end);
 
+test("the open leader's own imports show what they already buy", function(w)
+	w.players[2] = { leader = "Cleopatra", civ = "Egypt" };
+	w:AddDeal(1, 2, { Spice(2, 30, 10) });
+	w:AddDeal(0, 1, { Silk(0, 30, 12) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+
+	local theirs = BlocksOn(w, w.theirLuxuryList);
+	eq(#theirs, 1, "their block count");
+	eq(theirs[1].Title.text, "Import", "their heading");
+	IsLightGreen(theirs[1], "their import");
+	local icons = {};
+	for _, icon in ipairs(w:FlowIcons()) do
+		if icon.Top.parent == theirs[1].Icons then table.insert(icons, icon) end
+	end
+	eq(#icons, 2, "their icon count");
+	eq(icons[1].Turns.text, "20", "spices end sooner");
+	check(icons[1].Highlight.hidden, "a third-party import is framed as ours");
+	check(icons[1].Top.tooltip:find("Cleopatra · 1 · 20", 1, true) ~= nil, "spices seller: " .. tostring(icons[1].Top.tooltip));
+	eq(icons[2].Turns.text, "22", "silk turns");
+	check(icons[2].Highlight.hidden == false, "silk bought from us is not framed");
+	check(icons[2].Top.tooltip:find("[COLOR_Gold]Peter · 1 · 22 turns left[ENDCOLOR]", 1, true) ~= nil, "silk seller: " .. tostring(icons[2].Top.tooltip));
+	eq(#BlocksOn(w, w.luxuryList), 1, "our export of that silk");
+	eq(BlocksOn(w, w.luxuryList)[1].Title.text, "Export", "our heading");
+end);
+
 test("closing the deal screen removes import and export", function(w)
 	w:AddDeal(0, 1, { Silk(0, 30, 10) });
 	w:Load();
 	w:OpenDiplomacy(1);
 	w:OpenDeal();
-	eq(#w:FlowIcons(), 1, "icon count");
+	eq(#w:FlowIcons(), 2, "icon count");
 	w:CloseDeal();
 	eq(#w:FlowBlocks(), 0, "blocks left after close");
 	eq(#w:FlowIcons(), 0, "icons left after close");
 	eq(#w.luxuryList.children, 2, "luxury list children");
+	eq(#w.theirLuxuryList.children, 2, "their luxury list children");
 end);
 
 test("deals tab appears in the intel report when the game rebuilds the tabs", function(w)

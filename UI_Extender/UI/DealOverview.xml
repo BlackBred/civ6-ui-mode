@@ -50,10 +50,13 @@
 	</Instance>
 
 	<Instance Name="FlowBlock">
-		<Stack ID="Top" Anchor="L,T" Offset="2,6" Size="236,40" StackGrowth="Down" StackPadding="2">
-			<Label ID="Title" Anchor="L,T" Offset="2,0" Style="FontNormal14" FontStyle="Stroke" Color0="186,196,210,255" Color1="0,0,0,220"/>
-			<Stack ID="Icons" Anchor="L,T" StackGrowth="Right" WrapWidth="232" WrapGrowth="Down" StackPadding="4"/>
-		</Stack>
+		<Container ID="Top" Anchor="L,T" Offset="2,6" Size="236,40">
+			<Box ID="Tint" Anchor="L,T" Size="parent,parent" Color="0,0,0,0"/>
+			<Stack ID="Body" Anchor="L,T" Offset="2,2" Size="232,auto" StackGrowth="Down" StackPadding="2">
+				<Label ID="Title" Anchor="L,T" Offset="2,0" Style="FontNormal14" FontStyle="Stroke" Color0="186,196,210,255" Color1="0,0,0,220"/>
+				<Stack ID="Icons" Anchor="L,T" StackGrowth="Right" WrapWidth="228" WrapGrowth="Down" StackPadding="4"/>
+			</Stack>
+		</Container>
 	</Instance>
 
 	<Instance Name="FlowIcon">
