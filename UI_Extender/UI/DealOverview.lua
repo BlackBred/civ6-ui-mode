@@ -256,8 +256,8 @@ local FLOW_PER_ROW = 4;
 local MY_LUXURY_STACK = "/InGame/DiplomacyDealView/MyInventory/MyInventoryScroll/MyInventoryStack";
 local THEIR_LUXURY_STACK = "/InGame/DiplomacyDealView/TheirInventory/TheirInventoryScroll/TheirInventoryStack";
 -- Light washes, 0–1. Obvious beside each other, not a solid plate.
-local IMPORT_TINT = { 0.25, 0.70, 0.32, 0.22 };
-local EXPORT_TINT = { 0.75, 0.22, 0.20, 0.22 };
+local IMPORT_TINT = { 0.25, 0.70, 0.32, 0.06 };
+local EXPORT_TINT = { 0.75, 0.22, 0.20, 0.06 };
 
 local function ControlID(control)
 	if control == nil or control.GetID == nil then return "" end
