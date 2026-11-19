@@ -74,12 +74,8 @@ test("enacted deal is stored once", function()
 	eq(data.deals[1].a, 0, "low id");
 	eq(data.deals[1].b, 3, "high id");
 	eq(Kinds(data.deals[1]), "GOLD:5:0,RESOURCES:1:30", "items");
-	data = R.OnEnacted(data, {
-		a = 3, b = 0, turn = 35,
-		live = { { id = 1001, a = 3, b = 0, turn = 35, items = { Silk(3, 30) } } },
-		working = {},
-	});
-	eq(#data.deals, 1, "duplicate enactment");
+	data = R.Backfill(data, { { id = 1001, a = 3, b = 0, turn = 35, items = { Silk(3, 30) } } });
+	eq(#data.deals, 1, "listed again on load");
 end);
 
 test("acceptance before the event puts the lump sum on the deal", function()
@@ -218,6 +214,244 @@ test("the gameplay script records a deal that is already in the game", function(
 	data = R.Normalize(w.properties[R.PROP]);
 	eq(#data.deals, 2, "second deal");
 	eq(data.deals[2].id, 1002, "new id");
+end);
+
+test("the end turn round-trips as text and an older archive line still reads", function()
+	local data = R.Backfill(R.Empty(), { { id = 1001, a = 0, b = 1, turn = 10, items = { Silk(1, 30) } } });
+	data.deals[1].ended = 40;
+	local back = R.Normalize(R.EncodeArchive(data));
+	eq(back.deals[1].ended, 40, "ended");
+	local older = R.Normalize("D\t1001\t10\t0\t1\tRESOURCES/1/30/1/1/-1//~N\t0");
+	eq(#older.deals, 1, "older deal");
+	eq(older.deals[1].ended, nil, "no end turn yet");
+end);
+
+test("a deal that ran its term ends with the term, one cut short ends when it is gone", function()
+	local data = R.Backfill(R.Empty(), {
+		{ id = 1001, a = 0, b = 1, turn = 10, items = { Silk(1, 30) } },
+		{ id = 1002, a = 0, b = 1, turn = 20, items = { Silk(0, 30) } },
+		{ id = 1003, a = 0, b = 1, turn = 20, items = { Gold(50, 0) } },
+		{ id = 1004, a = 0, b = 2, turn = 5, items = { Silk(2, 10) } },
+	});
+	local marked = R.MarkEnded(data, { [1002] = true }, 45, 1, 0);
+	eq(marked, 1, "marked");
+	eq(R.FindID(data, 1001).ended, 40, "expired deal ends with its term");
+	eq(R.FindID(data, 1002).ended, nil, "running deal");
+	eq(R.FindID(data, 1003).ended, nil, "a one-time deal needs no end turn");
+	eq(R.FindID(data, 1004).ended, nil, "another pair is left alone");
+	eq(R.MarkEnded(data, {}, 46, 0, 1), 1, "the second deal is gone");
+	eq(R.FindID(data, 1002).ended, 46, "cut short");
+	eq(R.MarkEnded(data, {}, 50, 0, 1), 0, "an end turn is kept");
+	eq(R.MarkEnded(data, nil, 50, 0, 2), 0, "a failed read ends nothing");
+end);
+
+test("history lists finished deals of the pair, the latest first", function()
+	local data = R.Backfill(R.Empty(), {
+		{ id = 1001, a = 0, b = 1, turn = 10, items = { Silk(1, 30) } },
+		{ id = 1002, a = 0, b = 1, turn = 20, items = { Gold(50, 0) } },
+		{ id = 1003, a = 0, b = 1, turn = 30, items = { Silk(0, 30) } },
+		{ id = 1004, a = 0, b = 2, turn = 12, items = { Gold(5, 2) } },
+	});
+	R.MarkEnded(data, { [1003] = true }, 45, 0, 1);
+	local list = R.History(data, 1, 0, { [1003] = true });
+	eq(#list, 2, "history count");
+	eq(list[1].id, 1001, "ended on turn 40");
+	eq(list[2].id, 1002, "one-time on turn 20");
+	eq(R.EndedTurn(list[2]), 20, "one-time end turn");
+end);
+
+test("a recorded copy of a deal stored under its own id is not listed twice", function()
+	local data = R.Empty();
+	R.AddSynthetic(data, 0, 1, 10, { Gold(100, 0), Silk(1, 30) });
+	R.AddLive(data, { id = 1001, a = 0, b = 1, turn = 10, items = { Silk(1, 30) } });
+	R.MarkEnded(data, {}, 50, 0, 1);
+	local list = R.History(data, 0, 1, {});
+	eq(#list, 1, "history count");
+	eq(list[1].id, 1001, "the real deal");
+end);
+
+test("the end turn survives merging the property with the configuration", function()
+	local live = { { id = 1001, a = 0, b = 1, turn = 10, items = { Silk(1, 30) } } };
+	local property = R.Backfill(R.Empty(), live);
+	property.deals[1].ended = 41;
+	local config = R.Backfill(R.Empty(), live);
+	eq(R.MergeArchives(property, config).deals[1].ended, 41, "from the property");
+	eq(R.MergeArchives(config, property).deals[1].ended, 41, "from the configuration");
+end);
+
+test("a keyed deal table is one deal however often it arrives", function()
+	local data = R.OnSnapshot(R.Empty(), { a = 0, b = 3, turn = 92, accepted = 1, items = { Gold(60, 0) }, key = "p0t92n1" });
+	data = R.OnSnapshot(data, { a = 3, b = 0, turn = 92, accepted = 1, items = { Gold(60, 0) }, key = "p0t92n1" });
+	data = R.OnEnacted(data, { a = 0, b = 3, turn = 92, live = {}, working = { Gold(60, 0) } });
+	eq(#data.deals, 1, "deal count");
+	eq(#data.pending, 0, "pending");
+	eq(data.deals[1].keys[1], "p0t92n1", "key");
+end);
+
+test("two equal gifts in one turn are two deals, in either order of events", function()
+	local function gift(data, key, interfaceFirst)
+		local snap = { a = 0, b = 3, turn = 92, accepted = 1, items = { Gold(60, 0) }, key = key };
+		local enact = { a = 0, b = 3, turn = 92, live = {}, working = { Gold(60, 0) } };
+		if interfaceFirst then
+			data = R.OnSnapshot(data, snap);
+			data = R.OnEnacted(data, enact);
+		else
+			data = R.OnEnacted(data, enact);
+			data = R.OnSnapshot(data, snap);
+		end
+		return R.OnSnapshot(data, snap);
+	end
+	for _, interfaceFirst in ipairs({ true, false }) do
+		local data = gift(R.Empty(), "p0t92n1", interfaceFirst);
+		data = gift(data, "p0t92n2", interfaceFirst);
+		data = R.Normalize(R.EncodeArchive(data));
+		eq(#data.deals, 2, "deal count, interface first: " .. tostring(interfaceFirst));
+		eq(#R.History(data, 0, 3, {}), 2, "history count, interface first: " .. tostring(interfaceFirst));
+	end
+end);
+
+test("both humans' keys for one deal make one record, their second equal deal another", function()
+	local data = R.Empty();
+	for _, key in ipairs({ "p0t50n1", "p1t50n1", "p0t50n2", "p1t50n2" }) do
+		data = R.OnSnapshot(data, { a = 0, b = 1, turn = 50, accepted = 1, items = { Gold(60, 0) }, key = key });
+	end
+	eq(#data.deals, 2, "deal count");
+	eq(#data.deals[1].keys, 2, "first deal keys");
+	eq(#data.deals[2].keys, 2, "second deal keys");
+end);
+
+test("a recorded copy becomes the live deal once the game lists it", function()
+	local data = R.OnSnapshot(R.Empty(), { a = 0, b = 1, turn = 35, accepted = 1, items = { Gold(100, 0), Silk(1, 30) }, key = "p0t35n1" });
+	eq(#data.deals, 1, "copy");
+	data = R.OnEnacted(data, { a = 0, b = 1, turn = 35, live = { { id = 1001, a = 0, b = 1, turn = 35, items = { Silk(1, 30) } } }, working = {} });
+	eq(#data.deals, 1, "deal count");
+	eq(data.deals[1].id, 1001, "game id");
+	eq(Kinds(data.deals[1]), "GOLD:100:0,RESOURCES:1:30", "items");
+end);
+
+test("keys survive the text form and merging, and equal accepted tables stay apart", function()
+	local data = R.Empty();
+	R.AddAccepted(data, { a = 0, b = 1, turn = 9, items = { Gold(60, 0) }, key = "p0t9n1" });
+	R.AddAccepted(data, { a = 0, b = 1, turn = 9, items = { Gold(60, 0) }, key = "p0t9n2" });
+	R.AddAccepted(data, { a = 0, b = 1, turn = 9, items = { Gold(60, 0) }, key = "p0t9n2" });
+	eq(#data.accepted, 2, "accepted count");
+	R.AddSynthetic(data, 0, 1, 9, { Gold(60, 0) }, { "p0t9n1" });
+	local back = R.Normalize(R.EncodeArchive(data));
+	eq(back.deals[1].keys[1], "p0t9n1", "deal key");
+	eq(back.accepted[2].keys[1], "p0t9n2", "accepted key");
+	local key = R.NewKey(back, 0, 9, 0);
+	eq(key, "p0t9n3", "next key");
+	local live = R.Empty();
+	R.AddLive(live, { id = 1005, a = 0, b = 1, turn = 9, items = { Gold(60, 0) }, keys = { "p0t9n1" } });
+	local merged = R.MergeArchives(back, live);
+	eq(#merged.deals, 1, "merged by key");
+	eq(merged.deals[1].id, 1005, "game id wins");
+end);
+
+test("each enactment without a deal table from the interface is still one deal", function()
+	local data = R.Empty();
+	for _ = 1, 2 do
+		data = R.OnEnacted(data, { a = 0, b = 3, turn = 90, live = {}, working = { Gold(10, 0) } });
+	end
+	data = R.OnEnacted(data, { a = 0, b = 3, turn = 90, live = {}, working = { Gold(100, 0) } });
+	data = R.Normalize(R.EncodeArchive(data));
+	eq(#data.deals, 3, "deal count");
+	eq(#R.History(data, 0, 3, {}), 3, "history count");
+	check(data.deals[1].enacted and data.deals[2].enacted and data.deals[3].enacted, "enactment marks survive the text form");
+end);
+
+test("the interface's keys join the records the enactments made, one each", function()
+	local data = R.Empty();
+	for n = 1, 2 do
+		data = R.OnEnacted(data, { a = 0, b = 3, turn = 90, live = {}, working = { Gold(10, 0) } });
+		data = R.OnSnapshot(data, { a = 0, b = 3, turn = 90, accepted = 1, items = { Gold(10, 0) }, key = "p0t90n" .. n });
+	end
+	eq(#data.deals, 2, "deal count");
+	eq(#data.deals[1].keys, 1, "first deal keys");
+	eq(#data.deals[2].keys, 1, "second deal keys");
+	check(data.deals[1].keys[1] ~= data.deals[2].keys[1], "each deal has its own key");
+end);
+
+test("two different deals recorded under one number on two sides are both kept", function()
+	local property = R.Empty();
+	R.AddSynthetic(property, 0, 1, 92, { Gold(60, 0) }, { "p0t92n1" });
+	local config = R.Empty();
+	R.AddSynthetic(config, 0, 1, 92, { Gold(60, 0) }, { "p0t92n2" });
+	local merged = R.MergeArchives(property, config);
+	eq(#merged.deals, 2, "deal count");
+	check(merged.deals[1].id ~= merged.deals[2].id, "numbers differ");
+	local again = R.MergeArchives(merged, config);
+	eq(#again.deals, 2, "merging again adds nothing");
+	local fresh = R.AddSynthetic(again, 0, 1, 93, { Gold(1, 0) });
+	local same = 0;
+	for _, deal in ipairs(again.deals) do
+		if deal.id == fresh.id then same = same + 1 end
+	end
+	eq(same, 1, "a new number is not taken");
+end);
+
+test("the gameplay script notes the turn a deal stopped being listed", function()
+	local w = Mock.new({ modDir = MOD_DIR, turn = 35, players = {
+		[0] = { leader = "Peter", civ = "Russia" },
+		[1] = { leader = "Gandhi", civ = "India" },
+	} });
+	w:AddDeal(0, 1, { { type = "RESOURCES", from = 1, amount = 1, duration = 30, enacted = 30, valueType = 1 } }, 1001);
+	w:LoadGameplay();
+	w.turn = 36;
+	w.Events.TurnBegin(36);
+	eq(R.Normalize(w.properties[R.PROP]).deals[1].ended, nil, "still running");
+	w.deals = {};
+	w.turn = 42;
+	w.Events.TurnBegin(42);
+	eq(R.Normalize(w.properties[R.PROP]).deals[1].ended, 42, "ended");
+end);
+
+test("a lasting deal recorded before the game listed it takes its game id next turn", function()
+	local w = Mock.new({ modDir = MOD_DIR, turn = 90, players = {
+		[0] = { leader = "Peter", civ = "Russia" },
+		[3] = { leader = "Wilhelmina", civ = "Netherlands" },
+	} });
+	w:LoadGameplay();
+	w.Events.DiplomacyDealEnacted(0, 3);
+	w.exposed.UIExt.RecordSnapshot({
+		a = 0, b = 3, turn = 90, accepted = 1, uiextKey = "p0t90n1",
+		uiextItems = R.EncodeItems({ Silk(0, 30), Gold(1, 3) }),
+	});
+	local data = R.Normalize(w.properties[R.PROP]);
+	eq(#data.deals, 1, "recorded copy");
+	check(data.deals[1].id < 0, "no game id yet");
+	w:AddDeal(0, 3, { { type = "RESOURCES", from = 0, amount = 1, duration = 30, enacted = 90, valueType = 1 } }, 1005);
+	w.turn = 91;
+	w.Events.TurnBegin(91);
+	data = R.Normalize(w.properties[R.PROP]);
+	eq(#data.deals, 1, "deal count");
+	eq(data.deals[1].id, 1005, "game id");
+	eq(Kinds(data.deals[1]), "GOLD:1:0,RESOURCES:1:30", "items");
+	eq(data.deals[1].keys[1], "p0t90n1", "key kept");
+	local journal = w.properties[R.LOG_GAMEPLAY];
+	check(journal:find("t90 GP enact (0,3) live=[]", 1, true), "enactment with an empty list: " .. journal);
+	check(journal:find("GP snap direct (0,3) key=p0t90n1", 1, true), "snapshot");
+	check(journal:find("t91 GP turn -> 1005 -1->1005", 1, true), "promotion");
+end);
+
+test("the journal keeps only the latest lines", function()
+	local text;
+	for i = 1, R.LOG_LINES + 5 do text = R.AppendLog(text, "line " .. i) end
+	local count = select(2, text:gsub("~", "")) + 1;
+	eq(count, R.LOG_LINES, "line count");
+	eq(text:sub(1, 7), "line 6~", "oldest kept");
+	eq(R.AppendLog(nil, "a~b"), "a-b", "separator in a line");
+end);
+
+test("the journal describes what an update did to the deals", function()
+	local before = R.Empty();
+	R.AddSynthetic(before, 0, 3, 90, { Silk(0, 30) }, { "p0t90n1" });
+	local after = R.DecodeArchive(R.EncodeArchive(before));
+	after.deals[1].id = 1005;
+	after.deals[1].enacted = true;
+	R.AddSynthetic(after, 0, 3, 90, { Gold(60, 0) }, { "p0t90n2" });
+	eq(R.Changes(before, after), "new -2[GOLD60/0<0]{p0t90n2}; 1005 -1->1005 e", "changes");
+	eq(R.Changes(before, before), "no change", "nothing");
 end);
 
 local failed = 0;

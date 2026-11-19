@@ -14,9 +14,21 @@
 
 		<Label ID="Title" Anchor="L,T" Offset="12,9" Style="FontFlair16" FontStyle="shadow" Color0="236,220,176,255" Color1="0,0,0,200" SmallCaps="20" SmallCapsType="EveryWord" String="LOC_UIEXT_DEALS_TITLE"/>
 
-		<Label ID="EmptyLabel" Anchor="L,T" Offset="14,50" Style="FontNormal16" String="LOC_UIEXT_DEALS_EMPTY" Hidden="1" Color0="170,180,195,255" Color1="0,0,0,180"/>
+		<!-- Tabs as in the game's trade overview: a TabButton with its selected face laid over it. -->
+		<GridButton ID="CurrentTab" Anchor="L,T" Offset="8,42" Size="180,30" Style="TabButton">
+			<GridButton ID="CurrentTabSelected" Size="parent,parent" Style="TabButtonSelected" ConsumeMouseButton="0" ConsumeMouseOver="1"/>
+			<Label ID="CurrentTabLabel" Anchor="C,C" Offset="0,1" Style="TabFont" String="LOC_UIEXT_DEALS_TAB_CURRENT"/>
+			<Label ID="CurrentTabSelectedLabel" Anchor="C,C" Offset="0,1" Style="TabSelectedFont" String="LOC_UIEXT_DEALS_TAB_CURRENT" Hidden="1"/>
+		</GridButton>
+		<GridButton ID="HistoryTab" Anchor="L,T" Offset="192,42" Size="180,30" Style="TabButton">
+			<GridButton ID="HistoryTabSelected" Size="parent,parent" Style="TabButtonSelected" ConsumeMouseButton="0" ConsumeMouseOver="1" Hidden="1"/>
+			<Label ID="HistoryTabLabel" Anchor="C,C" Offset="0,1" Style="TabFont" String="LOC_UIEXT_DEALS_TAB_HISTORY"/>
+			<Label ID="HistoryTabSelectedLabel" Anchor="C,C" Offset="0,1" Style="TabSelectedFont" String="LOC_UIEXT_DEALS_TAB_HISTORY" Hidden="1"/>
+		</GridButton>
 
-		<ScrollPanel ID="Scroll" Anchor="L,T" Offset="8,44" Size="620,200" Vertical="1" AutoScrollBar="1">
+		<Label ID="EmptyLabel" Anchor="L,T" Offset="14,86" Style="FontNormal16" String="LOC_UIEXT_DEALS_EMPTY" Hidden="1" Color0="170,180,195,255" Color1="0,0,0,180"/>
+
+		<ScrollPanel ID="Scroll" Anchor="L,T" Offset="8,80" Size="620,200" Vertical="1" AutoScrollBar="1">
 			<Stack ID="DealStack" Anchor="L,T" Offset="0,0" StackGrowth="Down" StackPadding="8"/>
 			<ScrollBar Anchor="R,C" Offset="2,0" Size="11,parent" Style="ScrollVerticalBacking">
 				<Thumb Style="ScrollThumbAlt"/>

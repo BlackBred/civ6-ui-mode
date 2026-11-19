@@ -2,7 +2,28 @@
 <GameData>
   <BaseGameText>
     <Replace Tag="LOC_UIEXT_DEALS_TITLE">
-      <Text>Active deals</Text>
+      <Text>Deals</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_TAB_CURRENT">
+      <Text>Current deals</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_TAB_HISTORY">
+      <Text>Deal history</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_EMPTY">
+      <Text>No finished deals.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_PERIOD">
+      <Text>From turn {1_Start} to turn {2_End}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_ONCE">
+      <Text>One-time, on turn {1_Turn}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_TURN_YEAR">
+      <Text>{1_Turn} ({2_Year})</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_ITEM_UNTIL">
+      <Text>{1_Text} · until turn {2_Turn}</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_REPORT">
       <Text>Intel Report: Deals</Text>
@@ -103,7 +124,28 @@
   </BaseGameText>
   <LocalizedText>
     <Replace Tag="LOC_UIEXT_DEALS_TITLE" Language="ru_RU">
-      <Text>Действующие сделки</Text>
+      <Text>Сделки</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_TAB_CURRENT" Language="ru_RU">
+      <Text>Текущие сделки</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_TAB_HISTORY" Language="ru_RU">
+      <Text>История сделок</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_EMPTY" Language="ru_RU">
+      <Text>Завершённых сделок нет.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_PERIOD" Language="ru_RU">
+      <Text>С хода {1_Start} по ход {2_End}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_ONCE" Language="ru_RU">
+      <Text>Единомоментно в ходу {1_Turn}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_TURN_YEAR" Language="ru_RU">
+      <Text>{1_Turn} ({2_Year})</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_ITEM_UNTIL" Language="ru_RU">
+      <Text>{1_Text} · по ход {2_Turn}</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_REPORT" Language="ru_RU">
       <Text>Доклад разведки: сделки</Text>

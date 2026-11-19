@@ -397,6 +397,9 @@ function World:Environment()
 			GetProperty = function(_, key) return w.properties[key] end,
 			SetProperty = function(_, key, value) w.properties[key] = value end,
 		},
+		Calendar = {
+			MakeYearStr = function(turn) return tostring(4000 - turn * 40) .. " BC" end,
+		},
 		GameConfiguration = {
 			GetValue = function(key) return w.config[key] end,
 			SetValue = function(key, value) w.config[key] = value end,

@@ -861,6 +861,182 @@ test("a deal table left without a deal is not attached to a later one", function
 	eq(w:Cards()[1].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "card");
 end);
 
+test("the panel opens on current deals and the history tab switches", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	check(w.Controls.CurrentTab:IsSelected(), "current tab not selected");
+	check(not w.Controls.CurrentTabSelected.hidden, "current tab face");
+	check(w.Controls.HistoryTabSelected.hidden, "history tab face");
+	eq(#w:Cards(), 1, "current card count");
+	w.Controls.HistoryTab:Click();
+	check(w.Controls.HistoryTab:IsSelected(), "history tab not selected");
+	check(not w.Controls.CurrentTab:IsSelected(), "current tab still selected");
+	eq(#w:Cards(), 0, "history card count");
+	check(Visible(w.Controls.EmptyLabel), "empty label hidden");
+	eq(w.Controls.EmptyLabel.text, "No finished deals.", "empty history text");
+	eq(w.Controls.ExpandButton.text, "Deals: 1", "expand button still counts current deals");
+	local historyH, historyY = w.Controls.Root.h, w.Controls.Root.y;
+	w.Controls.CurrentTab:Click();
+	eq(#w:Cards(), 1, "back on current deals");
+	eq(w.Controls.Root.h, historyH, "panel height does not change with the tab");
+	eq(w.Controls.Root.y, historyY, "panel top does not move with the tab");
+	eq(w.Controls.EmptyLabel.text, "No active deals.", "empty current text");
+end);
+
+test("history shows finished deals with their turns and years", function(w)
+	w.turn = 50;
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 45) }, 1003);
+	w.properties["UIEXT_DEAL_ARCHIVE"] = table.concat({
+		"D\t1001\t10\t0\t1\tGOLD/100/0/0/-1/-1//;RESOURCES/1/30/1/1/-1//\t",
+		"D\t1002\t20\t0\t1\tGOLD/40/0/1/-1/-1//\t",
+		"D\t1004\t12\t0\t1\tGOLD/3/30/0/-1/-1//;RESOURCES/1/10/1/1/-1//\t30",
+		"N\t0",
+	}, "~");
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	w.Controls.HistoryTab:Click();
+	local cards = w:Cards();
+	eq(#cards, 3, "history card count");
+	eq(cards[1].Header.text, "From turn 10 (3600 BC) to turn 40 (2400 BC)", "term ran out");
+	eq(cards[1].OursOnceBody.text, "100 [ICON_GOLD]", "one-time part of a lasting deal");
+	eq(cards[1].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "lasting part");
+	eq(cards[2].Header.text, "From turn 12 (3520 BC) to turn 30 (2800 BC)", "cut short");
+	eq(cards[2].OursBody.text, "3 [ICON_GOLD] per turn · until turn 30", "line that ran to the end");
+	eq(cards[2].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk · until turn 22", "line that ended earlier");
+	eq(cards[3].Header.text, "One-time, on turn 20 (3200 BC)", "one-time exchange");
+	eq(cards[3].TheirsOnceBody.text, "40 [ICON_GOLD]", "one-time gold");
+	local saved = w.env.DealRecord.Normalize(w.config["UIEXT_DEAL_ARCHIVE"]);
+	eq(w.env.DealRecord.FindID(saved, 1001).ended, 40, "end turn written to the save");
+	eq(w.env.DealRecord.FindID(saved, 1003), nil, "running deal not in history");
+end);
+
+-- As in DiplomacyDeals.log, turn 92: a trade and two gifts with one leader in one turn.
+-- The game deletes each of them as soon as it is enacted.
+local function TradeAndTwoGifts(w)
+	w.turn = 92;
+	w:OpenDiplomacy(1);
+	for _, items in ipairs({
+		{ Gold(0, 100, 0), { type = "DIPLOMATIC_FAVOR", from = 1, amount = 20, duration = 0 } },
+		{ Gold(0, 100, 0) },
+		{ Gold(0, 60, 0) },
+	}) do
+		w.working = { a = 0, b = 1, items = items };
+		w:OpenDeal();
+		w.working = nil;
+		w.Events.DiplomacyDealEnacted(0, 1);
+		w:CloseDeal();
+	end
+	w:OpenDeal();
+	w.Controls.HistoryTab:Click();
+	local bodies = {};
+	for _, card in ipairs(w:Cards()) do
+		eq(card.Header.text, "One-time, on turn 92 (320 BC)", "header");
+		table.insert(bodies, card.OursOnceBody.text .. "|" .. card.TheirsOnceBody.text);
+	end
+	table.sort(bodies);
+	return table.concat(bodies, " ; ");
+end
+
+test("gifts made after a trade in the same turn reach the history", function(w)
+	w:LoadGameplay();
+	w:Load();
+	eq(TradeAndTwoGifts(w), "100 [ICON_GOLD]| ; 100 [ICON_GOLD]|20 [ICON_FAVOR] ; 60 [ICON_GOLD]|", "history");
+end);
+
+test("gifts reach the history when the interface hears of each deal first", function(w)
+	w:Load();
+	w:LoadGameplay();
+	eq(TradeAndTwoGifts(w), "100 [ICON_GOLD]| ; 100 [ICON_GOLD]|20 [ICON_FAVOR] ; 60 [ICON_GOLD]|", "history");
+end);
+
+local function TwoEqualGifts(w)
+	w.turn = 92;
+	w:OpenDiplomacy(1);
+	for _ = 1, 2 do
+		w.working = { a = 0, b = 1, items = { Gold(0, 60, 0) } };
+		w:OpenDeal();
+		w.working = nil;
+		w.Events.DiplomacyDealEnacted(0, 1);
+		w:CloseDeal();
+	end
+	w:CloseDiplomacy();
+end
+
+local function HistoryAfterReload(w)
+	w:Reload();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	w.Controls.HistoryTab:Click();
+	local bodies = {};
+	for _, card in ipairs(w:Cards()) do table.insert(bodies, card.OursOnceBody.text) end
+	return table.concat(bodies, " ; ");
+end
+
+test("two equal gifts in one turn are two history cards, also after a load", function(w)
+	w:LoadGameplay();
+	w:Load();
+	TwoEqualGifts(w);
+	w.turn = 93;
+	eq(HistoryAfterReload(w), "60 [ICON_GOLD] ; 60 [ICON_GOLD]", "history");
+end);
+
+test("two equal gifts are two cards when the interface hears of each deal first", function(w)
+	w:Load();
+	w:LoadGameplay();
+	TwoEqualGifts(w);
+	eq(HistoryAfterReload(w), "60 [ICON_GOLD] ; 60 [ICON_GOLD]", "history");
+end);
+
+test("two equal gifts are two cards with only the configuration saved", function(w)
+	w:LoadGameplay();
+	w:Load();
+	TwoEqualGifts(w);
+	w.properties = {};
+	eq(HistoryAfterReload(w), "60 [ICON_GOLD] ; 60 [ICON_GOLD]", "history");
+end);
+
+test("the journal notes when a new deal shows up in the game's list", function(w)
+	w:LoadGameplay();
+	w:Load();
+	w.turn = 90;
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = { Silk(0, 30) } };
+	w:OpenDeal();
+	w.working = nil;
+	w.Events.DiplomacyDealEnacted(0, 1);
+	w:Tick(10);
+	w:AddDeal(0, 1, { Silk(0, 30, 90) }, 1005);
+	w:Tick(10);
+	local journal = w.config[w.env.DealRecord.LOG_UI];
+	check(journal:find("t90 UI snap (0,1) key=p0t90n1 [RESOURCES1/30<0] live=[]", 1, true), "snapshot: " .. journal);
+	check(journal:find("UI seen (0,1) id=1005 step=", 1, true), "deal listed later: " .. journal);
+	check(w.properties[w.env.DealRecord.LOG_GAMEPLAY]:find("GP enact (0,1) live=[]", 1, true), "gameplay journal");
+end);
+
+test("the journal notes a deal that never shows up in the list", function(w)
+	w:Load();
+	w:OpenDiplomacy(1);
+	w.Events.DiplomacyDealEnacted(0, 1);
+	w:Tick(5 * 120);
+	local journal = w.config[w.env.DealRecord.LOG_UI];
+	check(journal:find("UI enact (0,1) no snapshot live=[]", 1, true), "enactment: " .. journal);
+	check(journal:find("UI probe end (0,1) no new id in 120 steps", 1, true), "probe end: " .. journal);
+end);
+
+test("history ends nothing when the game cannot be asked", function(w)
+	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\tRESOURCES/1/30/1/1/-1//\t~N\t0";
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	w.failDeals = true;
+	w.Controls.HistoryTab:Click();
+	eq(#w:Cards(), 0, "history card count");
+	eq(w.config["UIEXT_DEAL_ARCHIVE"], nil, "nothing written");
+end);
+
 test("failing deal API leaves the luxury list untouched", function(w)
 	w.failDeals = true;
 	w:Load();

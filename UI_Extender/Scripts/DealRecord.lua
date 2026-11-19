@@ -5,10 +5,10 @@
 -- turn the deal is enacted, and deletes the whole deal when it expires. This table
 -- is what Game:SetProperty stores under DealRecord.PROP for the rest of the game.
 --
---   { deals = { { id, turn, a, b, items = { item, ... } }, ... },
+--   { deals = { { id, turn, a, b, ended, keys, enacted, items = { item, ... } }, ... },
 --     pending = { { a, b, turn, accepted, items }, ... },
 --     missed = { { a, b, turn }, ... },
---     accepted = { { a, b, turn, items }, ... },
+--     accepted = { { a, b, turn, keys, items }, ... },
 --     next = 0 }
 --
 -- a < b. id is the game's deal id, or a negative number when the game had already
@@ -18,6 +18,9 @@
 -- accepted is every deal table the local player saw enacted. When the interface
 -- hears of the deal, the game may not list it yet, so the table is kept as is and
 -- matched to a live deal by pair, turn and its lasting items whenever it is shown.
+-- ended is the turn the game no longer listed the deal, or nil while it runs.
+-- keys name the accepted deal tables a record came from (see NewKey).
+-- enacted marks a record that an enactment event has already taken (see OnEnacted).
 
 DealRecord = DealRecord or {};
 
@@ -54,6 +57,76 @@ local function Number(value, fallback)
 	return n;
 end
 
+-- Accepted deal keys, "p<player>t<turn>n<seq>": one per deal table a player saw
+-- enacted. Two equal gifts in one turn differ only by their keys. A deal between
+-- two humans gets one key from each of them.
+local function KeysOf(raw)
+	local keys = {};
+	if type(raw) == "string" then
+		for key in raw:gmatch("[^,]+") do table.insert(keys, key) end
+	elseif type(raw) == "table" then
+		for _, key in pairs(raw) do
+			if type(key) == "string" and key ~= "" then table.insert(keys, key) end
+		end
+	end
+	return keys;
+end
+
+local function KeyPlayer(key)
+	if key == nil then return nil end
+	return key:match("^p(%-?%d+)t");
+end
+
+function DealRecord.HasKey(record, key)
+	for _, have in ipairs(record.keys or {}) do
+		if have == key then return true end
+	end
+	return false;
+end
+
+local function HasKeyFrom(record, key)
+	local player = KeyPlayer(key);
+	for _, have in ipairs(record.keys or {}) do
+		if KeyPlayer(have) == player then return true end
+	end
+	return false;
+end
+
+local function AddKeys(record, keys)
+	record.keys = record.keys or {};
+	for _, key in ipairs(keys or {}) do
+		if not DealRecord.HasKey(record, key) then table.insert(record.keys, key) end
+	end
+end
+
+function DealRecord.FindKey(data, key)
+	if key == nil then return nil end
+	for _, deal in ipairs(data.deals) do
+		if DealRecord.HasKey(deal, key) then return deal end
+	end
+	return nil;
+end
+
+-- A key no stored record has yet. floor is the last number this session handed out,
+-- for a record that has not reached the save.
+function DealRecord.NewKey(data, player, turn, floor)
+	local prefix = "p" .. tostring(player) .. "t" .. tostring(turn) .. "n";
+	local top = floor or 0;
+	local function scan(list)
+		for _, record in ipairs(list or {}) do
+			for _, key in ipairs(record.keys or {}) do
+				if key:sub(1, #prefix) == prefix then
+					local n = tonumber(key:sub(#prefix + 1));
+					if n ~= nil and n > top then top = n end
+				end
+			end
+		end
+	end
+	scan(data.deals);
+	scan(data.accepted);
+	return prefix .. tostring(top + 1), top + 1;
+end
+
 local function ItemFromRaw(item)
 	if type(item) ~= "table" or item.kind == nil or item.kind == "" then return nil end
 	return {
@@ -85,6 +158,9 @@ function DealRecord.Normalize(data)
 			turn = Number(deal.turn, 0),
 			a = Number(deal.a, nil),
 			b = Number(deal.b, nil),
+			ended = Number(deal.ended, nil),
+			keys = KeysOf(deal.keys),
+			enacted = deal.enacted == true or deal.enacted == 1 or deal.enacted == "1",
 			items = items,
 		});
 	end
@@ -120,7 +196,10 @@ function DealRecord.Normalize(data)
 		end
 		local a, b = Number(snap.a, nil), Number(snap.b, nil);
 		if a ~= nil and b ~= nil and #items > 0 then
-			table.insert(accepted, { a = math.min(a, b), b = math.max(a, b), turn = Number(snap.turn, 0), items = items });
+			table.insert(accepted, {
+				a = math.min(a, b), b = math.max(a, b), turn = Number(snap.turn, 0),
+				keys = KeysOf(snap.keys), items = items,
+			});
 		end
 	end
 
@@ -228,22 +307,32 @@ end
 
 -- Attach the snapshot to the live deal it belongs to. Two deals with the same
 -- leader on the same turn stay apart: the snapshot must contain that deal's
--- lasting items and not already be stored under another id.
-function DealRecord.Remember(data, lives, extras, turn)
+-- lasting items and not already be stored under another id. With a key, a deal
+-- that already has a key from this player is another deal.
+function DealRecord.Remember(data, lives, extras, turn, key)
 	data = DealRecord.Normalize(data);
 	if extras == nil or #extras == 0 then return data end
+	if key ~= nil and DealRecord.FindKey(data, key) ~= nil then return data end
 	local best = nil;
 	for _, live in ipairs(lives or {}) do
 		if live.turn == turn and live.id ~= nil and DealRecord.Covers(extras, live.items) then
 			local existing = DealRecord.FindID(data, live.id);
-			local already = existing ~= nil and DealRecord.Covers(existing.items, extras);
+			local already;
+			if key ~= nil then
+				already = existing ~= nil and HasKeyFrom(existing, key);
+			else
+				already = existing ~= nil and DealRecord.Covers(existing.items, extras);
+			end
 			if not already and (best == nil or live.id > best.id) then best = live end
 		end
 	end
 	if best == nil then return data end
 	local deal = DealRecord.FindID(data, best.id);
 	if deal == nil then deal = DealRecord.AddLive(data, best) end
-	if deal ~= nil then DealRecord.MergeItems(deal, extras) end
+	if deal ~= nil then
+		DealRecord.MergeItems(deal, extras);
+		if key ~= nil then AddKeys(deal, { key }) end
+	end
 	return data;
 end
 
@@ -256,10 +345,21 @@ function DealRecord.AddAccepted(data, snap)
 	if snap == nil or snap.a == nil or snap.b == nil or snap.items == nil or #snap.items == 0 then return end
 	local a, b = DealRecord.Pair(snap.a, snap.b);
 	local turn = snap.turn or 0;
+	local keys = snap.keys or (snap.key ~= nil and { snap.key }) or {};
 	for _, have in ipairs(data.accepted) do
-		if have.a == a and have.b == b and have.turn == turn and SameItems(have.items, snap.items) then return end
+		if have.a == a and have.b == b and have.turn == turn then
+			for _, key in ipairs(keys) do
+				if DealRecord.HasKey(have, key) then return end
+			end
+			-- Without keys on both sides, equal contents are the only sign of the same deal.
+			if (#keys == 0 or #(have.keys or {}) == 0) and SameItems(have.items, snap.items) then
+				AddKeys(have, keys);
+				return;
+			end
+		end
 	end
-	local copy = { a = a, b = b, turn = turn, items = {} };
+	local copy = { a = a, b = b, turn = turn, keys = {}, items = {} };
+	AddKeys(copy, keys);
 	DealRecord.MergeItems(copy, snap.items);
 	table.insert(data.accepted, copy);
 end
@@ -283,13 +383,47 @@ end
 function DealRecord.MergeArchives(base, extra)
 	base = DealRecord.Normalize(base);
 	extra = DealRecord.Normalize(extra);
+	local function lowest()
+		local low = base.next or 0;
+		for _, d in ipairs(base.deals) do
+			if d.id ~= nil and d.id < low then low = d.id end
+		end
+		return low;
+	end
 	for _, deal in ipairs(extra.deals) do
-		local have = DealRecord.FindID(base, deal.id);
+		local have = nil;
+		for _, key in ipairs(deal.keys or {}) do
+			have = have or DealRecord.FindKey(base, key);
+		end
+		if have == nil then
+			local byID = DealRecord.FindID(base, deal.id);
+			-- Recorded copies are numbered by whichever side made them, so one
+			-- number can name two different deals. Their keys tell them apart.
+			if byID ~= nil and deal.id < 0 and #(byID.keys or {}) > 0 and #(deal.keys or {}) > 0 then
+				deal.id = lowest() - 1;
+				base.next = deal.id;
+			else
+				have = byID;
+			end
+		end
+		-- A recorded copy that the other side already knows by the game's id.
+		if have ~= nil and have.id < 0 and deal.id >= 0 and DealRecord.FindID(base, deal.id) == nil then
+			have.id = deal.id;
+		end
 		if have == nil then
 			DealRecord.AddLive(base, deal);
 		else
 			DealRecord.MergeItems(have, deal.items);
+			AddKeys(have, deal.keys);
+			have.enacted = have.enacted or deal.enacted;
+			if deal.ended ~= nil and (have.ended == nil or deal.ended < have.ended) then
+				have.ended = deal.ended;
+			end
 		end
+	end
+	-- A copy numbered by the other side must not share a number with a new one.
+	for _, deal in ipairs(base.deals) do
+		if deal.id ~= nil and deal.id < (base.next or 0) then base.next = deal.id end
 	end
 	for _, snap in ipairs(extra.accepted) do
 		DealRecord.AddAccepted(base, snap);
@@ -328,30 +462,59 @@ function DealRecord.MergeItems(deal, items)
 	end
 end
 
+-- A copy recorded from the deal table before the game listed the deal. It holds
+-- every item the game kept, so the live deal takes it over instead of adding a second record.
+local function CopyOf(data, live, a, b)
+	if live.id < 0 or live.items == nil or #live.items == 0 then return nil end
+	local found = nil;
+	for _, deal in ipairs(data.deals) do
+		if deal.id ~= nil and deal.id < 0 and deal.a == a and deal.b == b and deal.turn == (live.turn or 0)
+			and DealRecord.Covers(deal.items, live.items) then
+			found = found or deal;
+		end
+	end
+	return found;
+end
+
 function DealRecord.AddLive(data, live)
 	if live == nil or live.id == nil or DealRecord.FindID(data, live.id) ~= nil then return nil end
 	if live.a == nil or live.b == nil then return nil end
+	local a, b = math.min(live.a, live.b), math.max(live.a, live.b);
+	local copy = CopyOf(data, live, a, b);
+	if copy ~= nil then
+		copy.id = live.id;
+		DealRecord.MergeItems(copy, live.items);
+		AddKeys(copy, live.keys);
+		copy.enacted = copy.enacted or live.enacted;
+		return copy;
+	end
 	local deal = {
 		id = live.id,
 		turn = live.turn or 0,
-		a = math.min(live.a, live.b),
-		b = math.max(live.a, live.b),
+		a = a,
+		b = b,
+		ended = live.ended,
+		keys = {},
+		enacted = live.enacted and true or false,
 		items = {},
 	};
+	AddKeys(deal, live.keys);
 	DealRecord.MergeItems(deal, live.items);
 	table.insert(data.deals, deal);
 	return deal;
 end
 
-function DealRecord.AddSynthetic(data, a, b, turn, items)
+function DealRecord.AddSynthetic(data, a, b, turn, items, keys)
 	data.next = (data.next or 0) - 1;
 	local deal = {
 		id = data.next,
 		turn = turn or 0,
 		a = math.min(a, b),
 		b = math.max(a, b),
+		keys = {},
 		items = {},
 	};
+	AddKeys(deal, keys);
 	DealRecord.MergeItems(deal, items);
 	table.insert(data.deals, deal);
 	return deal;
@@ -368,10 +531,26 @@ function DealRecord.Backfill(data, lives)
 	return data;
 end
 
+local function HasInstant(items)
+	for _, item in ipairs(items) do
+		if DealRecord.IsInstant(item) then return true end
+	end
+	return false;
+end
+
+-- The snapshot is this stored deal. A deal that holds only what the game kept takes
+-- the snapshot's one-time items. A deal that already has one-time items is complete,
+-- so only the same contents are the same deal: two one-time deals with one leader
+-- in one turn, such as a trade and then a gift, stay apart.
+local function Fits(items, deal)
+	if not DealRecord.Covers(items, deal.items) then return false end
+	return not HasInstant(deal.items) or SameItems(deal.items, items);
+end
+
 local function FindCovered(data, a, b, turn, items)
 	local found = nil;
 	for _, deal in ipairs(data.deals) do
-		if deal.a == a and deal.b == b and deal.turn == turn and DealRecord.Covers(items, deal.items) then
+		if deal.a == a and deal.b == b and deal.turn == turn and Fits(items, deal) then
 			found = deal;
 		end
 	end
@@ -459,7 +638,7 @@ end
 
 local function MergeCovered(candidates, items)
 	for i = #candidates, 1, -1 do
-		if DealRecord.Covers(items, candidates[i].items) then
+		if Fits(items, candidates[i]) then
 			DealRecord.MergeItems(candidates[i], items);
 			return true;
 		end
@@ -493,45 +672,68 @@ local function SnapshotConfirmed(pending, turn, working)
 	return true;
 end
 
+-- A record of this turn that came from an accepted deal table and that no
+-- enactment has taken yet: the interface heard of the deal first. With a known
+-- deal table only a record with the same contents qualifies.
+local function Unclaimed(data, a, b, turn, working)
+	local any, same = nil, nil;
+	for _, deal in ipairs(data.deals) do
+		if deal.a == a and deal.b == b and deal.turn == turn and not deal.enacted and #(deal.keys or {}) > 0 then
+			any = any or deal;
+			if working ~= nil and #working > 0 and SameItems(deal.items, working) then same = same or deal end
+		end
+	end
+	if working ~= nil and #working > 0 then return same end
+	return any;
+end
+
+-- Every enactment is exactly one deal (the game reports each deal once, to each
+-- context). A deal the game lists is stored under its id. A deal it has already
+-- deleted, or does not list yet, gets one record: the one the interface already
+-- made, or a new one from the working deal. A record taken by one enactment is
+-- never taken by another, so two equal gifts in one turn stay two deals.
 -- info: { a, b, turn, live = { { id, a, b, turn, items }, ... }, working = { item, ... } }
 function DealRecord.OnEnacted(data, info)
 	data = DealRecord.Normalize(data);
 	if info == nil or info.a == nil or info.b == nil then return data end
 	local a, b = DealRecord.Pair(info.a, info.b);
 	local turn = info.turn or 0;
+	local working = info.working or {};
 	local fresh = {};
 	for _, live in ipairs(info.live or {}) do
 		local deal = DealRecord.AddLive(data, live);
-		if deal ~= nil then table.insert(fresh, deal) end
+		if deal ~= nil then
+			deal.enacted = true;
+			table.insert(fresh, deal);
+		end
 	end
-	local used = false;
 	local pending = DealRecord.TakePending(data, a, b);
-	if pending ~= nil and SnapshotConfirmed(pending, turn, info.working) then
-		local candidates = #fresh > 0 and fresh or DealsThisTurn(data, a, b, turn);
-		if MergeCovered(candidates, pending.items) then
-			used = true;
-		elseif pending.accepted and FillShell(fresh, pending.items) then
-			used = true;
-		elseif pending.accepted and not HasPairTurn(data, a, b, turn) then
-			DealRecord.AddSynthetic(data, a, b, turn, pending.items);
-			used = true;
+	if pending ~= nil and not SnapshotConfirmed(pending, turn, working) then pending = nil end
+
+	if #fresh > 0 then
+		for _, items in ipairs({ pending ~= nil and pending.items or {}, working }) do
+			if #items > 0 and (MergeCovered(fresh, items) or FillShell(fresh, items)) then
+				DealRecord.ClearMiss(data, a, b, turn);
+			end
 		end
-		if used then DealRecord.ClearMiss(data, a, b, pending.turn or turn) end
+		return data;
 	end
-	if info.working ~= nil and #info.working > 0 then
-		local candidates = #fresh > 0 and fresh or DealsThisTurn(data, a, b, turn);
-		if MergeCovered(candidates, info.working) or FillShell(candidates, info.working) then
-			used = true;
-			DealRecord.ClearMiss(data, a, b, turn);
-		elseif not HasPairTurn(data, a, b, turn) then
-			DealRecord.AddSynthetic(data, a, b, turn, info.working);
-			used = true;
-			DealRecord.ClearMiss(data, a, b, turn);
+
+	local record = nil;
+	if pending ~= nil and pending.accepted then
+		record = DealRecord.AddSynthetic(data, a, b, turn, pending.items);
+	else
+		record = Unclaimed(data, a, b, turn, working);
+		if record == nil and #working > 0 then
+			record = DealRecord.AddSynthetic(data, a, b, turn, working);
 		end
 	end
-	if #fresh == 0 and not used and not HasPairTurn(data, a, b, turn) then
+	if record == nil then
 		DealRecord.NoteMiss(data, a, b, turn);
+		return data;
 	end
+	record.enacted = true;
+	DealRecord.ClearMiss(data, a, b, turn);
 	return data;
 end
 
@@ -539,13 +741,43 @@ local function Accepted(value)
 	return value == true or value == 1;
 end
 
--- snap: { a, b, turn, accepted, items }
+-- An accepted deal table with its key is one deal, every time it arrives. It
+-- joins the stored deal it is, or becomes a record of its own: the game has
+-- already deleted a one-time deal, and a lasting one takes the record over when
+-- the game lists it (AddLive).
+local function ApplyKeyed(data, a, b, turn, items, key)
+	if items == nil or #items == 0 then return end
+	local have = DealRecord.FindKey(data, key);
+	if have ~= nil then
+		DealRecord.MergeItems(have, items);
+		return;
+	end
+	local target = nil;
+	for _, deal in ipairs(data.deals) do
+		if deal.a == a and deal.b == b and deal.turn == turn and not HasKeyFrom(deal, key) and Fits(items, deal) then
+			target = deal;
+		end
+	end
+	if target == nil then
+		target = DealRecord.AddSynthetic(data, a, b, turn, items, { key });
+	else
+		DealRecord.MergeItems(target, items);
+		AddKeys(target, { key });
+	end
+	DealRecord.ClearMiss(data, a, b, turn);
+end
+
+-- snap: { a, b, turn, accepted, items, key }
 function DealRecord.OnSnapshot(data, snap)
 	data = DealRecord.Normalize(data);
 	if snap == nil or snap.a == nil or snap.b == nil then return data end
 	local a, b = DealRecord.Pair(snap.a, snap.b);
 	local turn = snap.turn or 0;
 	local accepted = Accepted(snap.accepted);
+	if accepted and snap.key ~= nil and snap.key ~= "" then
+		ApplyKeyed(data, a, b, turn, snap.items, snap.key);
+		return data;
+	end
 	if ApplyExtras(data, a, b, turn, snap.items, false) then
 		DealRecord.ClearMiss(data, a, b, turn);
 		return data;
@@ -558,6 +790,166 @@ function DealRecord.OnSnapshot(data, snap)
 	snap.accepted = accepted;
 	DealRecord.SetPending(data, snap);
 	return data;
+end
+
+-- ---------------------------------------------------------------------------
+-- Event journal kept in the save. The Mac build writes no Lua.log, so the save
+-- is the only place to read afterwards what the game reported and when.
+-- The gameplay script keeps its lines in a game property, the interface in the
+-- configuration: each context writes only its own value.
+-- ---------------------------------------------------------------------------
+DealRecord.LOG_GAMEPLAY = "UIEXT_LOG_GAMEPLAY";
+DealRecord.LOG_UI = "UIEXT_LOG_UI";
+DealRecord.LOG_LINES = 300;
+
+function DealRecord.AppendLog(text, line)
+	local lines = {};
+	if type(text) == "string" and text ~= "" then
+		for part in (text .. "~"):gmatch("(.-)~") do table.insert(lines, part) end
+	end
+	table.insert(lines, (tostring(line):gsub("~", "-")));
+	local first = math.max(1, #lines - DealRecord.LOG_LINES + 1);
+	return table.concat(lines, "~", first, #lines);
+end
+
+function DealRecord.ItemsBrief(items)
+	local parts = {};
+	for _, item in ipairs(items or {}) do
+		table.insert(parts, tostring(item.kind) .. tostring(item.amount) .. "/" .. tostring(item.duration)
+			.. "<" .. tostring(item.from));
+	end
+	return "[" .. table.concat(parts, ",") .. "]";
+end
+
+-- What an update did to the stored deals, in a few words per deal.
+function DealRecord.Changes(before, after)
+	before = DealRecord.Normalize(before);
+	after = DealRecord.Normalize(after);
+	local parts = {};
+	for _, deal in ipairs(after.deals) do
+		local old = DealRecord.FindID(before, deal.id);
+		local moved = false;
+		if old == nil then
+			for _, key in ipairs(deal.keys or {}) do
+				old = old or DealRecord.FindKey(before, key);
+			end
+			moved = old ~= nil;
+		end
+		local keys = table.concat(deal.keys or {}, ",");
+		if old == nil then
+			table.insert(parts, "new " .. tostring(deal.id) .. DealRecord.ItemsBrief(deal.items) .. "{" .. keys .. "}"
+				.. (deal.enacted and " e" or ""));
+		else
+			local bits = {};
+			if moved then table.insert(bits, tostring(old.id) .. "->" .. tostring(deal.id)) end
+			if #(deal.keys or {}) ~= #(old.keys or {}) then table.insert(bits, "keys{" .. keys .. "}") end
+			if deal.enacted and not old.enacted then table.insert(bits, "e") end
+			if #deal.items ~= #old.items then table.insert(bits, "items" .. DealRecord.ItemsBrief(deal.items)) end
+			if deal.ended ~= old.ended then table.insert(bits, "ended=" .. tostring(deal.ended)) end
+			if #bits > 0 then table.insert(parts, tostring(deal.id) .. " " .. table.concat(bits, " ")) end
+		end
+	end
+	if #after.missed ~= #before.missed then table.insert(parts, "missed=" .. tostring(#after.missed)) end
+	if #after.pending ~= #before.pending then table.insert(parts, "pending=" .. tostring(#after.pending)) end
+	if #parts == 0 then return "no change" end
+	return table.concat(parts, "; ");
+end
+
+-- ---------------------------------------------------------------------------
+-- Finished deals
+-- ---------------------------------------------------------------------------
+function DealRecord.IsOneTime(deal)
+	if deal == nil or deal.items == nil or #deal.items == 0 then return false end
+	for _, item in ipairs(deal.items) do
+		if not DealRecord.IsInstant(item) then return false end
+	end
+	return true;
+end
+
+-- The turn the last lasting item runs out, or nil when an item has no term.
+function DealRecord.ExpectedEnd(deal)
+	local longest = nil;
+	for _, item in ipairs(deal.items or {}) do
+		if not DealRecord.IsInstant(item) then
+			if (item.duration or 0) <= 0 then return nil end
+			if longest == nil or item.duration > longest then longest = item.duration end
+		end
+	end
+	if longest == nil then return nil end
+	return (deal.turn or 0) + longest;
+end
+
+function DealRecord.ItemEnd(deal, item, ended)
+	local duration = item.duration or 0;
+	if duration <= 0 then return ended end
+	return math.min((deal.turn or 0) + duration, ended);
+end
+
+function DealRecord.EndedTurn(deal)
+	if DealRecord.IsOneTime(deal) then return deal.turn or 0 end
+	return deal.ended;
+end
+
+-- Gives every stored deal of the pair that the game no longer lists the turn it
+-- ended. liveIDs must come from a successful read: a failed one would end them all.
+-- A deal that is found gone after its term was already over ended with the term,
+-- which covers deals that finished before this was recorded.
+-- Returns how many deals were marked.
+function DealRecord.MarkEnded(data, liveIDs, now, a, b)
+	if data == nil or data.deals == nil or liveIDs == nil or now == nil then return 0 end
+	local pa, pb = nil, nil;
+	if a ~= nil and b ~= nil then pa, pb = DealRecord.Pair(a, b) end
+	local marked = 0;
+	for _, deal in ipairs(data.deals) do
+		if deal.ended == nil and deal.id ~= nil and (pa == nil or (deal.a == pa and deal.b == pb))
+			and not DealRecord.IsOneTime(deal) and not liveIDs[tonumber(deal.id)] then
+			local expected = DealRecord.ExpectedEnd(deal);
+			if deal.id >= 0 then
+				deal.ended = (expected ~= nil and expected < now) and expected or now;
+			elseif expected ~= nil and expected <= now then
+				-- A recorded copy has no id of its own to look up, only its term.
+				deal.ended = expected;
+			end
+			if deal.ended ~= nil then
+				deal.ended = math.max(deal.ended, deal.turn or 0);
+				marked = marked + 1;
+			end
+		end
+	end
+	return marked;
+end
+
+-- A copy recorded before the game listed the deal, of a deal that is stored under its own id too.
+local function Duplicates(data, deal)
+	if deal.id == nil or deal.id >= 0 then return false end
+	for _, other in ipairs(data.deals) do
+		if other ~= deal and other.id ~= nil and other.id >= 0 and other.a == deal.a and other.b == deal.b
+			and other.turn == deal.turn and DealRecord.Covers(deal.items, other.items) then
+			return true;
+		end
+	end
+	return false;
+end
+
+-- Finished deals of the pair, the latest first.
+function DealRecord.History(data, a, b, liveIDs)
+	local list = {};
+	if data == nil or data.deals == nil or a == nil or b == nil then return list end
+	a, b = DealRecord.Pair(a, b);
+	for _, deal in ipairs(data.deals) do
+		local live = liveIDs ~= nil and deal.id ~= nil and liveIDs[tonumber(deal.id)];
+		if deal.a == a and deal.b == b and not live and #deal.items > 0
+			and DealRecord.EndedTurn(deal) ~= nil and not Duplicates(data, deal) then
+			table.insert(list, deal);
+		end
+	end
+	table.sort(list, function(x, y)
+		local ex, ey = DealRecord.EndedTurn(x), DealRecord.EndedTurn(y);
+		if ex ~= ey then return ex > ey end
+		if x.turn ~= y.turn then return x.turn > y.turn end
+		return (x.id or 0) > (y.id or 0);
+	end);
+	return list;
 end
 
 -- The player operation carries a string, because a nested table is not a safe argument.
@@ -671,6 +1063,9 @@ function DealRecord.EncodeArchive(data)
 		table.insert(lines, table.concat({
 			"D", tostring(deal.id), tostring(deal.turn or 0), tostring(deal.a), tostring(deal.b),
 			DealRecord.EncodeItems(deal.items),
+			deal.ended ~= nil and tostring(deal.ended) or "",
+			table.concat(deal.keys or {}, ","),
+			deal.enacted and "1" or "",
 		}, "\t"));
 	end
 	for _, snap in ipairs(data.pending or {}) do
@@ -686,6 +1081,7 @@ function DealRecord.EncodeArchive(data)
 		table.insert(lines, table.concat({
 			"A", tostring(snap.turn or 0), tostring(snap.a), tostring(snap.b),
 			DealRecord.EncodeItems(snap.items),
+			table.concat(snap.keys or {}, ","),
 		}, "\t"));
 	end
 	table.insert(lines, "N\t" .. tostring(data.next or 0));
@@ -707,6 +1103,9 @@ function DealRecord.DecodeArchive(text)
 				a = tonumber(fields[3]),
 				b = tonumber(fields[4]),
 				items = DealRecord.DecodeItems(fields[5]),
+				ended = tonumber(fields[6]),
+				keys = KeysOf(fields[7]),
+				enacted = fields[8] == "1",
 			});
 		elseif kind == "P" then
 			table.insert(data.pending, {
@@ -728,6 +1127,7 @@ function DealRecord.DecodeArchive(text)
 				a = tonumber(fields[2]),
 				b = tonumber(fields[3]),
 				items = DealRecord.DecodeItems(fields[4]),
+				keys = KeysOf(fields[5]),
 			});
 		elseif kind == "N" then
 			data.next = tonumber(fields[1]) or 0;

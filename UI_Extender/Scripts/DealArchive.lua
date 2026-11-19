@@ -6,6 +6,9 @@
 -- This script still records every machine's deals into the game property. On load
 -- it keeps one-time items the configuration already has, and it never writes the
 -- configuration itself, so a later backfill cannot wipe them.
+--
+-- At the start of every turn it gives recorded copies their game ids and notes
+-- the turn each stored deal stopped being listed.
 include("DealRecord");
 
 local function Log(message)
@@ -92,17 +95,18 @@ local function LiveFrom(deal, a, b, fallbackTurn)
 	};
 end
 
+-- The second value is false when the game could not be asked, so an empty list means nothing.
 local function ReadPair(a, b)
 	local list = {};
-	if DealManager == nil or DealManager.GetPlayerDeals == nil then return list end
+	if DealManager == nil or DealManager.GetPlayerDeals == nil then return list, false end
 	local ok, deals = pcall(DealManager.GetPlayerDeals, a, b);
-	if not ok or type(deals) ~= "table" then return list end
+	if not ok or type(deals) ~= "table" then return list, false end
 	local turn = CurrentTurn();
 	for _, deal in ipairs(deals) do
 		local live = LiveFrom(deal, a, b, turn);
 		if live ~= nil then table.insert(list, live) end
 	end
-	return list;
+	return list, true;
 end
 
 local function ReadWorking(a, b)
@@ -153,63 +157,135 @@ local function AllLive()
 	return list;
 end
 
-local function OnSnapshotPayload(payload)
+local function MarkEnded(data)
+	local ids = AliveIDs();
+	local turn = CurrentTurn();
+	local marked = 0;
+	for i = 1, #ids do
+		for j = i + 1, #ids do
+			local lives, ok = ReadPair(ids[i], ids[j]);
+			if ok then
+				local liveIDs = {};
+				for _, live in ipairs(lives) do liveIDs[tonumber(live.id)] = true end
+				marked = marked + DealRecord.MarkEnded(data, liveIDs, turn, ids[i], ids[j]);
+			end
+		end
+	end
+	return marked;
+end
+
+-- ---------------------------------------------------------------------------
+-- Journal (see DealRecord.AppendLog). The counter is shared with the interface,
+-- so the two journals can be read in one order.
+-- ---------------------------------------------------------------------------
+local m_Seq = 0;
+
+local function NextSeq()
+	if ExposedMembers ~= nil then
+		ExposedMembers.UIExt = ExposedMembers.UIExt or {};
+		ExposedMembers.UIExt.LogSeq = (ExposedMembers.UIExt.LogSeq or 0) + 1;
+		return ExposedMembers.UIExt.LogSeq;
+	end
+	m_Seq = m_Seq + 1;
+	return m_Seq;
+end
+
+local function Journal(text)
+	local line = tostring(NextSeq()) .. " t" .. tostring(CurrentTurn()) .. " GP " .. text;
+	Log(line);
+	if Game == nil or Game.GetProperty == nil or Game.SetProperty == nil then return end
+	pcall(function()
+		local old = Game:GetProperty(DealRecord.LOG_GAMEPLAY);
+		Game:SetProperty(DealRecord.LOG_GAMEPLAY, DealRecord.AppendLog(old, line));
+	end);
+end
+
+local function IDsOf(lives)
+	local ids = {};
+	for _, live in ipairs(lives) do table.insert(ids, tostring(live.id)) end
+	return "[" .. table.concat(ids, ",") .. "]";
+end
+
+-- A deal recorded from its deal table before the game listed it takes its game id
+-- here (Backfill), so it does not wait for the next load.
+local function OnTurnBegin()
+	local ok, err = pcall(function()
+		local loaded = Load();
+		local before = DealRecord.EncodeArchive(loaded);
+		local data = DealRecord.Backfill(loaded, AllLive());
+		MarkEnded(data);
+		if DealRecord.EncodeArchive(data) ~= before then
+			Save(data);
+			Journal("turn -> " .. DealRecord.Changes(loaded, data));
+		end
+	end);
+	if not ok then Journal("turn error " .. tostring(err)) end
+end
+
+local function OnSnapshotPayload(payload, source)
 	if type(payload) ~= "table" then return end
-	local data = Load();
-	local before = #data.deals;
-	data = DealRecord.OnSnapshot(data, {
+	local loaded = Load();
+	local items = DealRecord.DecodeItems(payload.uiextItems or payload.items);
+	local data = DealRecord.OnSnapshot(loaded, {
 		a = payload.a,
 		b = payload.b,
 		turn = payload.turn,
 		accepted = payload.accepted,
 		-- `items` is a name the operation itself uses, so the text rides as uiextItems.
-		items = DealRecord.DecodeItems(payload.uiextItems or payload.items),
+		items = items,
+		key = payload.uiextKey,
 	});
 	Save(data);
-	if #data.deals ~= before then
-		Log("archive snapshot deals=" .. tostring(#data.deals));
-	end
+	Journal("snap " .. tostring(source) .. " (" .. tostring(payload.a) .. "," .. tostring(payload.b) .. ") key="
+		.. tostring(payload.uiextKey) .. " " .. DealRecord.ItemsBrief(items) .. " -> " .. DealRecord.Changes(loaded, data));
 end
 
 local function OnEnacted(firstID, secondID)
 	if firstID == nil or secondID == nil then return end
 	local ok, err = pcall(function()
-		local data = Load();
-		local before = #data.deals;
-		data = DealRecord.OnEnacted(data, {
+		local loaded = Load();
+		local live, liveOk = ReadPair(firstID, secondID);
+		local working = ReadWorking(firstID, secondID);
+		local data = DealRecord.OnEnacted(loaded, {
 			a = firstID,
 			b = secondID,
 			turn = CurrentTurn(),
-			live = ReadPair(firstID, secondID),
-			working = ReadWorking(firstID, secondID),
+			live = live,
+			working = working,
 		});
 		Save(data);
-		if #data.deals ~= before then
-			Log("archive enacted " .. tostring(firstID) .. "," .. tostring(secondID) .. " deals=" .. tostring(#data.deals));
-		end
+		Journal("enact (" .. tostring(firstID) .. "," .. tostring(secondID) .. ") live=" .. (liveOk and IDsOf(live) or "?")
+			.. " working=" .. DealRecord.ItemsBrief(working) .. " -> " .. DealRecord.Changes(loaded, data));
 	end);
-	if not ok then Log("archive " .. tostring(err)) end
+	if not ok then Journal("enact error " .. tostring(err)) end
 end
 
 local function OnOperation(_, params)
-	local ok, err = pcall(OnSnapshotPayload, params);
-	if not ok then Log("snapshot " .. tostring(err)) end
+	local ok, err = pcall(OnSnapshotPayload, params, "op");
+	if not ok then Journal("snap error " .. tostring(err)) end
+end
+
+local function OnDirectSnapshot(payload)
+	local ok, err = pcall(OnSnapshotPayload, payload, "direct");
+	if not ok then Journal("snap error " .. tostring(err)) end
 end
 
 local function Initialize()
 	if DealRecord == nil then
 		error("DealRecord.lua is not loaded: it must be listed in ImportFiles in the modinfo");
 	end
-	local data = DealRecord.Backfill(Load(), AllLive());
+	local loaded = Load();
+	local data = DealRecord.Backfill(loaded, AllLive());
 	Save(data);
 	Events.DiplomacyDealEnacted.Add(OnEnacted);
+	Events.TurnBegin.Add(OnTurnBegin);
 	GameEvents.UIExt_OnDealSnapshot.Add(OnOperation);
 	if ExposedMembers ~= nil then
 		ExposedMembers.UIExt = ExposedMembers.UIExt or {};
-		ExposedMembers.UIExt.RecordSnapshot = OnSnapshotPayload;
+		ExposedMembers.UIExt.RecordSnapshot = OnDirectSnapshot;
 	end
-	Log("archive ready deals=" .. tostring(#data.deals));
+	Journal("load deals=" .. tostring(#data.deals) .. " -> " .. DealRecord.Changes(loaded, data));
 end
 
 local ok, err = pcall(Initialize);
-if not ok then Log("archive init " .. tostring(err)) end
+if not ok then Journal("init error " .. tostring(err)) end

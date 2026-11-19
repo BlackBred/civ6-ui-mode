@@ -1,4 +1,4 @@
--- Active deals panel on the diplomacy screen.
+-- Deals panel on the deal screen: current deals and the history of finished ones.
 include("InstanceManager");
 include("DealRecord");
 
@@ -12,7 +12,7 @@ local SCREEN_MARGIN = 12;
 local MAX_PANEL_FRACTION = 0.25;
 local HEADER_HEIGHT = 36;
 local FOOTER_HEIGHT = 40;
-local SCROLL_TOP = 44;
+local SCROLL_TOP = 80;
 local CARD_PADDING = 10;
 local ROW_HEIGHT = 22;
 local CHAR_WIDTH = 9;
@@ -22,6 +22,7 @@ local m_FlowBlockIM = nil;
 local m_FlowIconIM = nil;
 local m_Open = false;
 local m_Expanded = true;
+local m_ShowHistory = false;
 local m_OtherPlayerID = -1;
 local m_CardWidth = 560;
 local m_UpdateTick = 0;
@@ -35,6 +36,7 @@ local m_FlowMissLogged = false;
 -- once the game reports the deal, per player pair (m_Snaps).
 local m_Snaps = {};
 local m_Watch = nil;
+local m_KeyFloor = 0;
 
 -- ---------------------------------------------------------------------------
 -- Diagnostics: Lua.log (needs EnableTuner 1 in AppOptions.txt) plus an on-screen error line.
@@ -244,6 +246,33 @@ local function WriteStored(data, configOk)
 	end
 end
 
+-- Journal in the save (see DealRecord.AppendLog); the counter is shared with the gameplay script.
+local m_Seq = 0;
+
+local function Journal(text)
+	local seq;
+	if ExposedMembers ~= nil then
+		ExposedMembers.UIExt = ExposedMembers.UIExt or {};
+		ExposedMembers.UIExt.LogSeq = (ExposedMembers.UIExt.LogSeq or 0) + 1;
+		seq = ExposedMembers.UIExt.LogSeq;
+	else
+		m_Seq = m_Seq + 1;
+		seq = m_Seq;
+	end
+	local turn = 0;
+	if Game ~= nil and Game.GetCurrentGameTurn ~= nil then
+		local ok, value = pcall(Game.GetCurrentGameTurn);
+		if ok and type(value) == "number" then turn = value end
+	end
+	local line = tostring(seq) .. " t" .. tostring(turn) .. " UI " .. text;
+	Log(line);
+	if IsNetworkGame() or GameConfiguration == nil or GameConfiguration.GetValue == nil or GameConfiguration.SetValue == nil then
+		return;
+	end
+	local ok, old = pcall(GameConfiguration.GetValue, DealRecord.LOG_UI);
+	if ok then pcall(GameConfiguration.SetValue, DealRecord.LOG_UI, DealRecord.AppendLog(old, line)) end
+end
+
 local function DealEnactedTurn(deal)
 	local turn = nil;
 	local ok, iter, state, first = pcall(deal.Items, deal);
@@ -255,6 +284,19 @@ local function DealEnactedTurn(deal)
 		end
 	end
 	return turn;
+end
+
+-- What was handed over at once comes first on each side, then what runs for a term.
+local function InstantsFirst(card)
+	for _, list in ipairs({ card.ours, card.theirs, card.shared }) do
+		local instants, lasting = {}, {};
+		for _, e in ipairs(list) do
+			table.insert(e.instant and instants or lasting, e);
+		end
+		for i = #list, 1, -1 do list[i] = nil end
+		for _, e in ipairs(instants) do table.insert(list, e) end
+		for _, e in ipairs(lasting) do table.insert(list, e) end
+	end
 end
 
 -- Live items, plus one-time items the game already deleted. Those come from the
@@ -309,16 +351,7 @@ local function ReadDeal(deal, localID, otherID)
 		addInstants(snap.items);
 	end
 
-	-- What was handed over at once comes first on each side, then what runs for a term.
-	for _, list in ipairs({ card.ours, card.theirs, card.shared }) do
-		local instants, lasting = {}, {};
-		for _, e in ipairs(list) do
-			table.insert(e.instant and instants or lasting, e);
-		end
-		for i = #list, 1, -1 do list[i] = nil end
-		for _, e in ipairs(instants) do table.insert(list, e) end
-		for _, e in ipairs(lasting) do table.insert(list, e) end
-	end
+	InstantsFirst(card);
 	return card;
 end
 
@@ -351,6 +384,75 @@ local function GatherDeals(localID, otherID)
 		if b.soonest == nil then return true end
 		return a.soonest < b.soonest;
 	end);
+	return cards;
+end
+
+-- ---------------------------------------------------------------------------
+-- Finished deals, from the save. The game forgets a deal once it ends.
+-- ---------------------------------------------------------------------------
+local function CurrentTurn()
+	local ok, turn = pcall(Game.GetCurrentGameTurn);
+	if ok and type(turn) == "number" then return turn end
+	return 0;
+end
+
+-- nil when the game could not be asked: then nothing may be taken as ended.
+local function LiveIDs(localID, otherID)
+	if DealManager == nil then return nil end
+	local ok, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
+	if not ok or type(deals) ~= "table" then return nil end
+	local ids = {};
+	for _, deal in ipairs(deals) do
+		local id = Call(deal, "GetID");
+		if id ~= nil then ids[tonumber(id)] = true end
+	end
+	return ids;
+end
+
+local function HistoryCard(deal, localID, archive)
+	local card = { ours = {}, theirs = {}, shared = {}, localID = localID };
+	local ended = DealRecord.EndedTurn(deal);
+	card.history = { start = deal.turn, ended = ended, oneTime = DealRecord.IsOneTime(deal) };
+	local items, lasting = {}, {};
+	for _, stored in ipairs(deal.items) do
+		table.insert(items, stored);
+		if not DealRecord.IsInstant(stored) then table.insert(lasting, stored) end
+	end
+	local accepted = #lasting > 0 and DealRecord.AcceptedFor(archive, deal.a, deal.b, deal.turn, lasting) or nil;
+	if accepted ~= nil then
+		for _, stored in ipairs(accepted.items) do
+			if DealRecord.IsInstant(stored) then table.insert(items, stored) end
+		end
+	end
+	local seen, seenShared = {}, {};
+	for _, stored in ipairs(items) do
+		local entry = EntryFor(stored, nil);
+		if entry ~= nil and not entry.instant then
+			entry.untilTurn = DealRecord.ItemEnd(deal, stored, ended);
+		end
+		AddEntry(card, entry, seen, seenShared);
+	end
+	InstantsFirst(card);
+	return card;
+end
+
+local function GatherHistory(localID, otherID)
+	local cards = {};
+	local live = LiveIDs(localID, otherID);
+	if live == nil then return cards end
+	local archive, configOk = ReadStored();
+	local before = DealRecord.EncodeArchive(archive);
+	if DealRecord.MarkEnded(archive, live, CurrentTurn(), localID, otherID) > 0 then
+		WriteStored(archive, configOk);
+		Journal("history (" .. tostring(localID) .. "," .. tostring(otherID) .. ") -> "
+			.. DealRecord.Changes(DealRecord.DecodeArchive(before), archive));
+	end
+	for _, deal in ipairs(DealRecord.History(archive, localID, otherID, live)) do
+		local card = HistoryCard(deal, localID, archive);
+		if #card.ours + #card.theirs + #card.shared > 0 then
+			table.insert(cards, card);
+		end
+	end
 	return cards;
 end
 
@@ -698,9 +800,36 @@ local function UpdateResourceFlows()
 	Log("flows import=" .. tostring(#importList) .. " export=" .. tostring(#exportList) .. " theirImport=" .. tostring(#theirImport));
 end
 
+-- "35 (1200 BC)": the turn with its calendar year.
+local function TurnText(turn)
+	if Calendar ~= nil and Calendar.MakeYearStr ~= nil then
+		local ok, year = pcall(Calendar.MakeYearStr, turn);
+		if ok and type(year) == "string" and year ~= "" then
+			return Format("LOC_UIEXT_HISTORY_TURN_YEAR", turn, year);
+		end
+	end
+	return tostring(turn);
+end
+
+-- A finished deal states when it ran. A line that stopped earlier than the deal gets its own last turn.
+local function HistoryTiming(card)
+	local history = card.history;
+	if history.oneTime then
+		return Format("LOC_UIEXT_HISTORY_ONCE", TurnText(history.start)), false;
+	end
+	local uniform = true;
+	for _, list in ipairs({ card.ours, card.theirs, card.shared }) do
+		for _, e in ipairs(list) do
+			if e.untilTurn ~= nil and e.untilTurn ~= history.ended then uniform = false end
+		end
+	end
+	return Format("LOC_UIEXT_HISTORY_PERIOD", TurnText(history.start), TurnText(history.ended)), not uniform;
+end
+
 -- Header text and whether each lasting line needs its own turn count.
 -- One-time items are already handed over, so they do not change the countdown.
 local function CardTiming(card)
+	if card.history ~= nil then return HistoryTiming(card) end
 	local turns = nil;
 	local uniform = true;
 	local anyOpen = false;
@@ -748,6 +877,8 @@ local function LineTexts(entries, showTurns, plainOnce)
 	for _, e in ipairs(entries) do
 		if e.instant then
 			table.insert(lines, plainOnce and e.text or Format("LOC_UIEXT_DEALS_ITEM_ONCE", e.text));
+		elseif showTurns and e.untilTurn ~= nil then
+			table.insert(lines, Format("LOC_UIEXT_HISTORY_ITEM_UNTIL", e.text, e.untilTurn));
 		elseif showTurns and not e.openEnded then
 			table.insert(lines, Format("LOC_UIEXT_DEALS_ITEM_TURNS", e.text, e.remaining));
 		elseif showTurns then
@@ -1207,10 +1338,14 @@ local function RefreshUnsafe()
 	if civ ~= "" then title = title .. "  ·  " .. civ end
 	Controls.Title:SetText(title);
 
-	local cards = GatherDeals(LocalPlayerID(), otherID);
-	Controls.ExpandButton:SetText(Lookup("LOC_UIEXT_DEALS_EXPAND") .. ": " .. tostring(#cards));
+	local current = GatherDeals(LocalPlayerID(), otherID);
+	Controls.ExpandButton:SetText(Lookup("LOC_UIEXT_DEALS_EXPAND") .. ": " .. tostring(#current));
+	local cards = current;
+	if m_ShowHistory then cards = GatherHistory(LocalPlayerID(), otherID) end
+	Controls.EmptyLabel:SetText(Lookup(m_ShowHistory and "LOC_UIEXT_HISTORY_EMPTY" or "LOC_UIEXT_DEALS_EMPTY"));
 
-	Log("refresh player=" .. tostring(otherID) .. " civ=" .. civ .. " cards=" .. tostring(#cards));
+	Log("refresh player=" .. tostring(otherID) .. " civ=" .. civ .. " cards=" .. tostring(#cards)
+		.. (m_ShowHistory and " history" or ""));
 
 	m_DealIM:ResetInstances();
 	local leader = LeaderName(otherID);
@@ -1222,14 +1357,12 @@ local function RefreshUnsafe()
 	Controls.DealStack:CalculateSize();
 	Controls.DealStack:ReprocessAnchoring();
 
-	local contentH = Controls.DealStack:GetSizeY();
 	local empty = #cards == 0;
-	if empty then contentH = 30 end
 	Controls.EmptyLabel:SetHide(not empty);
 	Controls.Scroll:SetHide(empty);
 
-	local maxScroll = math.max(ROW_HEIGHT * 4, math.floor(screenH * MAX_PANEL_FRACTION) - SCROLL_TOP - FOOTER_HEIGHT - 8);
-	local scrollH = math.min(contentH, maxScroll);
+	-- Always the full height, so switching tabs does not resize the panel.
+	local scrollH = math.max(ROW_HEIGHT * 4, math.floor(screenH * MAX_PANEL_FRACTION) - SCROLL_TOP - FOOTER_HEIGHT - 8);
 	local panelH = SCROLL_TOP + scrollH + 8 + FOOTER_HEIGHT;
 	local top = screenH - SCREEN_MARGIN - panelH;
 
@@ -1333,18 +1466,36 @@ local function LivesForPair(a, b)
 	return list;
 end
 
+local function IDList(lives)
+	local ids = {};
+	for _, live in ipairs(lives) do table.insert(ids, tostring(live.id)) end
+	return "[" .. table.concat(ids, ",") .. "]";
+end
+
 local function PublishSnapshot(snap)
 	m_Snaps[snap.key] = { turn = snap.turn, items = snap.items, accepted = true };
 	local data, configOk = ReadStored();
-	DealRecord.AddAccepted(data, snap);
-	data = DealRecord.Remember(data, LivesForPair(snap.a, snap.b), snap.items, snap.turn);
+	local before = DealRecord.EncodeArchive(data);
+	local dealKey;
+	dealKey, m_KeyFloor = DealRecord.NewKey(data, LocalPlayerID(), snap.turn, m_KeyFloor);
+	DealRecord.AddAccepted(data, { a = snap.a, b = snap.b, turn = snap.turn, items = snap.items, key = dealKey });
+	local lives = LivesForPair(snap.a, snap.b);
+	data = DealRecord.Remember(data, lives, snap.items, snap.turn, dealKey);
+	-- The configuration is what reliably reaches the save, so every deal gets its own record here too.
+	data = DealRecord.OnSnapshot(data, {
+		a = snap.a, b = snap.b, turn = snap.turn, accepted = 1, items = snap.items, key = dealKey,
+	});
 	WriteStored(data, configOk);
+	Journal("snap (" .. tostring(snap.a) .. "," .. tostring(snap.b) .. ") key=" .. tostring(dealKey) .. " "
+		.. DealRecord.ItemsBrief(snap.items) .. " live=" .. IDList(lives)
+		.. " -> " .. DealRecord.Changes(DealRecord.DecodeArchive(before), data));
 	local payload = {
 		a = snap.a,
 		b = snap.b,
 		turn = snap.turn,
 		accepted = 1,
 		uiextItems = DealRecord.EncodeItems(snap.items),
+		uiextKey = dealKey,
 	};
 	-- In a network game only the player operation may write: it runs on every machine.
 	if not IsNetworkGame() and ExposedMembers ~= nil and ExposedMembers.UIExt ~= nil and ExposedMembers.UIExt.RecordSnapshot ~= nil then
@@ -1377,6 +1528,23 @@ local function OnToggle()
 	ApplyVisibility();
 end
 
+local function ShowTabSelection()
+	local function mark(prefix, selected)
+		Controls[prefix]:SetSelected(selected);
+		Controls[prefix .. "Selected"]:SetHide(not selected);
+		Controls[prefix .. "Label"]:SetHide(selected);
+		Controls[prefix .. "SelectedLabel"]:SetHide(not selected);
+	end
+	mark("CurrentTab", not m_ShowHistory);
+	mark("HistoryTab", m_ShowHistory);
+end
+
+local function SelectTab(history)
+	m_ShowHistory = history;
+	ShowTabSelection();
+	if m_Open then Refresh() end
+end
+
 local function OnPlayerChosen(playerID)
 	if playerID ~= nil and playerID >= 0 then
 		m_OtherPlayerID = playerID;
@@ -1395,10 +1563,53 @@ local function OnDealsChanged()
 	Try("deals tab", RefreshDealsTab);
 end
 
+-- After an enactment the pair's deal list is polled for a while, and the journal
+-- notes when a new game deal id shows up in it (see the TODO in docs/ROADMAP.md).
+local PROBE_STEPS = 120;
+local m_Probes = {};
+
+local function StartProbe(firstID, secondID)
+	local key = DealRecord.PairKey(firstID, secondID);
+	local probe = m_Probes[key] or { a = firstID, b = secondID, known = {}, seen = 0 };
+	probe.steps = 0;
+	probe.turn = CurrentTurn();
+	local live = LiveIDs(firstID, secondID) or {};
+	for id in pairs(live) do probe.known[id] = true end
+	m_Probes[key] = probe;
+end
+
+local function ProbeStep()
+	for key, probe in pairs(m_Probes) do
+		probe.steps = probe.steps + 1;
+		local live = LiveIDs(probe.a, probe.b);
+		for id in pairs(live or {}) do
+			if not probe.known[id] then
+				probe.known[id] = true;
+				probe.seen = probe.seen + 1;
+				Journal("seen (" .. tostring(probe.a) .. "," .. tostring(probe.b) .. ") id=" .. tostring(id)
+					.. " step=" .. tostring(probe.steps) .. " enactTurn=" .. tostring(probe.turn));
+			end
+		end
+		if probe.steps >= PROBE_STEPS then
+			if probe.seen == 0 then
+				Journal("probe end (" .. tostring(probe.a) .. "," .. tostring(probe.b) .. ") no new id in "
+					.. tostring(probe.steps) .. " steps");
+			end
+			m_Probes[key] = nil;
+		end
+	end
+end
+
 local function OnDealEnacted(firstID, secondID)
 	Try("snapshot", function()
 		local snap = TakeWatchFor(firstID, secondID);
-		if snap ~= nil then PublishSnapshot(snap) end
+		if snap ~= nil then
+			PublishSnapshot(snap);
+		else
+			Journal("enact (" .. tostring(firstID) .. "," .. tostring(secondID) .. ") no snapshot live="
+				.. IDList(LivesForPair(firstID, secondID)));
+		end
+		if firstID ~= nil and secondID ~= nil then StartProbe(firstID, secondID) end
 	end);
 	OnDealsChanged();
 end
@@ -1438,6 +1649,7 @@ local function OnUpdate()
 		end
 	end
 	Try("watch", WatchDealTable);
+	Try("probe", ProbeStep);
 	Try("flows", UpdateResourceFlows);
 	Try("deals tab", SyncDealsTab);
 	Try("panel", ApplyVisibility);
@@ -1460,6 +1672,9 @@ local function Initialize()
 
 	Controls.CollapseButton:RegisterCallback(Mouse.eLClick, OnToggle);
 	Controls.ExpandButton:RegisterCallback(Mouse.eLClick, OnToggle);
+	Controls.CurrentTab:RegisterCallback(Mouse.eLClick, function() SelectTab(false) end);
+	Controls.HistoryTab:RegisterCallback(Mouse.eLClick, function() SelectTab(true) end);
+	ShowTabSelection();
 
 	LuaEvents.DiploScene_SceneOpened.Add(OnPlayerChosen);
 	LuaEvents.DiploScene_LeaderSelect.Add(OnPlayerChosen);
