@@ -73,6 +73,7 @@ function Control:SetText(t)
 end
 function Control:GetText() return self.text end
 function Control:SetOffsetVal(x, y) self.x, self.y = x, y end
+function Control:SetOffsetY(y) self.y = y end
 function Control:GetOffsetX() return self.x end
 function Control:GetOffsetY() return self.y end
 function Control:SetSizeVal(w, h) self.w, self.h = w, h end

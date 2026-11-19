@@ -18,10 +18,9 @@ local function Items(w, name, parent)
 end
 
 -- What the deals tab shows: { header, sides = { { title, items = { text, ... } } } } per deal.
--- list: the stack to read, the deals by default.
-local function TabDeals(w, panel, list)
+local function TabDeals(w, panel)
 	local deals = {};
-	for _, deal in ipairs(Items(w, "DealsTabDeal", list or panel.TabCards)) do
+	for _, deal in ipairs(Items(w, "DealsTabDeal", panel.TabCards)) do
 		local entry = { header = deal.Header.text, sides = {} };
 		for _, side in ipairs(Items(w, "DealsTabSide", deal.Sides)) do
 			local title, anchor = nil, nil;
@@ -637,16 +636,52 @@ test("deals tab lists trade routes both ways under the deals", function(w)
 	check(not panel.RoutesRule.hidden, "rule between deals and routes");
 	check(not panel.RoutesHeader.hidden, "routes heading");
 	check(panel.RoutesEmpty.hidden, "no-routes line shown with routes");
-	local routes = TabDeals(w, panel, panel.TabRoutes);
+	local routes = Items(w, "DealsTabRoute", panel.TabRoutes);
 	eq(#routes, 2, "only routes with this leader");
-	eq(routes[1].header, "Moscow → Delhi · your route", "our route first");
-	eq(routes[1].sides[1].title, "Moscow", "origin city");
-	eq(table.concat(routes[1].sides[1].items, "|"), "+4 [ICON_Gold]  +1.5 [ICON_Science]", "origin yield");
-	eq(routes[1].sides[2].title, "Delhi", "destination city");
-	eq(table.concat(routes[1].sides[2].items, "|"), "+2 [ICON_Gold]", "destination yield");
-	eq(routes[2].header, "Delhi → Novgorod · route of Gandhi", "their route");
-	eq(table.concat(routes[2].sides[1].items, "|"), "+1 [ICON_Food]  +1 [ICON_Production]", "their origin yield");
-	eq(table.concat(routes[2].sides[2].items, "|"), "No yield", "our city earns nothing");
+
+	local ours = routes[1];
+	check(Visible(ours.LeftCityOurs) and ours.LeftCityTheirs.hidden, "our origin on the left, in our color");
+	eq(ours.LeftCityOurs.text, "Moscow", "our route first, origin");
+	check(Visible(ours.RightCityTheirs) and ours.RightCityOurs.hidden, "their destination on the right, in their color");
+	eq(ours.RightCityTheirs.text, "Delhi", "destination");
+	eq(ours.LeftYields.text, "+4 [ICON_Gold]  +1.5 [ICON_Science]", "origin yield");
+	eq(ours.RightYields.text, "+2 [ICON_Gold]", "destination yield");
+	check(not ours.ArrowOurs.hidden and ours.ArrowTheirs.hidden, "our route has the blue arrow");
+
+	local theirs = routes[2];
+	check(Visible(theirs.LeftCityTheirs) and theirs.LeftCityOurs.hidden, "their origin on the left, in their color");
+	eq(theirs.LeftCityTheirs.text, "Delhi", "their route, origin");
+	check(Visible(theirs.RightCityOurs) and theirs.RightCityTheirs.hidden, "our destination on the right, in our color");
+	eq(theirs.RightCityOurs.text, "Novgorod", "destination");
+	eq(theirs.LeftYields.text, "+1 [ICON_Food]  +1 [ICON_Production]", "their origin yield");
+	eq(theirs.RightYields.text, "No yield", "our city earns nothing");
+	check(theirs.ArrowOurs.hidden and not theirs.ArrowTheirs.hidden, "their route has the orange arrow");
+end);
+
+test("short Cyrillic city names keep both yields on one line", function(w)
+	w:AddCity(0, 1, "Абу-Симбел");
+	w:AddCity(1, 7, "Смоленск");
+	w:AddRoute(0, 1, 1, 7, { [2] = 3, [3] = 1 }, {});
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local route = Items(w, "DealsTabRoute", panel.TabRoutes)[1];
+	eq(route.LeftYields.y, route.RightYields.y, "yields of both cities on one line");
+	eq(route.LeftYields.y, 32, "right under a one-row name");
+end);
+
+test("many yields of a route city go on several lines", function(w)
+	w:AddCity(0, 1, "Moscow");
+	w:AddCity(1, 7, "Delhi");
+	w:AddRoute(0, 1, 1, 7, { [0] = 1, [1] = 2, [2] = 3, [3] = 4 }, {});
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local route = Items(w, "DealsTabRoute", panel.TabRoutes)[1];
+	eq(route.LeftYields.text, "+1 [ICON_Food]  +2 [ICON_Production]  +3 [ICON_Gold][NEWLINE]+4 [ICON_Science]", "yield lines");
+	check(route.Row.h > route.LeftYields.y + 22, "row is tall enough for both lines");
 end);
 
 test("deals tab says when there are no trade routes", function(w)
@@ -655,7 +690,7 @@ test("deals tab says when there are no trade routes", function(w)
 	w:IntelReport();
 	w.LuaEvents.DiploScene_RefreshTabs(1);
 	local _, panel = w:DealsTab();
-	eq(#TabDeals(w, panel, panel.TabRoutes), 0, "route count");
+	eq(#Items(w, "DealsTabRoute", panel.TabRoutes), 0, "route count");
 	check(not panel.RoutesEmpty.hidden, "no-routes line hidden");
 	check(not panel.TabEmpty.hidden, "no-deals line hidden");
 end);

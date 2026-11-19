@@ -58,12 +58,6 @@
     <Replace Tag="LOC_UIEXT_ROUTES_EMPTY">
       <Text>No active trade routes.</Text>
     </Replace>
-    <Replace Tag="LOC_UIEXT_ROUTES_OURS">
-      <Text>{1_From} → {2_To} · your route</Text>
-    </Replace>
-    <Replace Tag="LOC_UIEXT_ROUTES_THEIRS">
-      <Text>{1_From} → {2_To} · route of {3_Leader}</Text>
-    </Replace>
     <Replace Tag="LOC_UIEXT_ROUTES_NO_YIELD">
       <Text>No yield</Text>
     </Replace>
@@ -215,12 +209,6 @@
     </Replace>
     <Replace Tag="LOC_UIEXT_ROUTES_EMPTY" Language="ru_RU">
       <Text>Нет активных торговых путей.</Text>
-    </Replace>
-    <Replace Tag="LOC_UIEXT_ROUTES_OURS" Language="ru_RU">
-      <Text>{1_From} → {2_To} · ваш путь</Text>
-    </Replace>
-    <Replace Tag="LOC_UIEXT_ROUTES_THEIRS" Language="ru_RU">
-      <Text>{1_From} → {2_To} · путь: {3_Leader}</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_ROUTES_NO_YIELD" Language="ru_RU">
       <Text>Без дохода</Text>

@@ -1166,9 +1166,15 @@ local function LineTexts(entries, showTurns, plainOnce)
 end
 
 -- Approximate on-screen width: icon tags draw as about two characters, UTF-8 counted by code points.
+-- Bytes are compared one by one rather than with a byte range in a pattern: with the range,
+-- short Cyrillic names came out two rows tall in the game.
 local function VisibleLength(line)
 	local plain = line:gsub("%[.-%]", "xx");
-	local _, count = plain:gsub("[^\128-\191]", "");
+	local count = 0;
+	for i = 1, #plain do
+		local b = plain:byte(i);
+		if b < 128 or b > 191 then count = count + 1 end
+	end
 	return count;
 end
 
@@ -1336,6 +1342,7 @@ local m_TabPanelIM = nil;
 local m_TabDealIM = nil;
 local m_TabSideIM = nil;
 local m_TabItemIM = nil;
+local m_TabRouteIM = nil;
 local m_Tab = nil;
 local m_TabMissLogged = false;
 
@@ -1478,13 +1485,21 @@ local function RouteCityName(playerID, cityID)
 	return Lookup("LOC_UIEXT_DEALS_CITY_UNNAMED");
 end
 
-local function AmountText(amount)
-	local rounded = math.floor(amount * 10 + 0.5) / 10;
-	if rounded == math.floor(rounded) then return string.format("%d", rounded) end
-	return string.format("%.1f", rounded);
-end
+-- Layout of a route row; the columns themselves are placed in the XML.
+-- One table: the main chunk is close to Lua's limit of 200 locals.
+local ROUTE = {
+	WRAP = 159,
+	TOP = 10,
+	YIELDS_PER_LINE = 3,
+};
 
-local function RouteYieldsText(yields)
+-- A few yields per line, so an amount never wraps away from its icon.
+local function RouteYieldLines(yields)
+	local function AmountText(amount)
+		local rounded = math.floor(amount * 10 + 0.5) / 10;
+		if rounded == math.floor(rounded) then return string.format("%d", rounded) end
+		return string.format("%.1f", rounded);
+	end
 	local parts = {};
 	for _, y in ipairs(type(yields) == "table" and yields or {}) do
 		local amount = tonumber(y.Amount) or 0;
@@ -1493,8 +1508,12 @@ local function RouteYieldsText(yields)
 			table.insert(parts, (amount > 0 and "+" or "") .. AmountText(amount) .. " " .. (info.IconString or Lookup(info.Name)));
 		end
 	end
-	if #parts == 0 then return Lookup("LOC_UIEXT_ROUTES_NO_YIELD") end
-	return table.concat(parts, "  ");
+	if #parts == 0 then return { Lookup("LOC_UIEXT_ROUTES_NO_YIELD") } end
+	local lines = {};
+	for i = 1, #parts, ROUTE.YIELDS_PER_LINE do
+		table.insert(lines, table.concat(parts, "  ", i, math.min(i + ROUTE.YIELDS_PER_LINE - 1, #parts)));
+	end
+	return lines;
 end
 
 local function CollectRoutes(fromID, toID, list)
@@ -1511,8 +1530,8 @@ local function CollectRoutes(fromID, toID, list)
 					ours = fromID == LocalPlayerID(),
 					origin = RouteCityName(fromID, route.OriginCityID),
 					destination = RouteCityName(toID, route.DestinationCityID),
-					originYields = RouteYieldsText(route.OriginYields),
-					destinationYields = RouteYieldsText(route.DestinationYields),
+					originYields = RouteYieldLines(route.OriginYields),
+					destinationYields = RouteYieldLines(route.DestinationYields),
 				});
 			end
 		end
@@ -1532,17 +1551,26 @@ local function GatherRoutes(localID, otherID)
 	return list;
 end
 
-local function AddTabRoute(route, leader)
-	local header;
-	if route.ours then
-		header = Format("LOC_UIEXT_ROUTES_OURS", route.origin, route.destination);
-	else
-		header = Format("LOC_UIEXT_ROUTES_THEIRS", route.origin, route.destination, leader);
+local function AddTabRoute(route)
+	local inst = m_TabRouteIM:GetInstance(m_Tab.panel.TabRoutes);
+	-- The city name in its owner's color, its yields under it. Returns the bottom of the column.
+	local function place(side, owner, name, lines)
+		local shown = inst[side .. "City" .. owner];
+		inst[side .. "City" .. (owner == "Ours" and "Theirs" or "Ours")]:SetHide(true);
+		shown:SetText(name);
+		shown:SetHide(false);
+		local y = ROUTE.TOP + TabTextHeight(name, ROUTE.WRAP);
+		local yields = inst[side .. "Yields"];
+		yields:SetOffsetY(y);
+		yields:SetText(table.concat(lines, "[NEWLINE]"));
+		return y + #lines * TAB_ROW_HEIGHT;
 	end
-	AddTabEntry(m_Tab.panel.TabRoutes, header, {
-		{ route.ours and "OursTitle" or "TheirsTitle", route.origin, { route.originYields } },
-		{ route.ours and "TheirsTitle" or "OursTitle", route.destination, { route.destinationYields } },
-	});
+	local leftBottom = place("Left", route.ours and "Ours" or "Theirs", route.origin, route.originYields);
+	local rightBottom = place("Right", route.ours and "Theirs" or "Ours", route.destination, route.destinationYields);
+	inst.ArrowOurs:SetHide(not route.ours);
+	inst.ArrowTheirs:SetHide(route.ours);
+	inst.Row:SetSizeVal(TAB_WIDTH, math.max(leftBottom, rightBottom) + 6);
+	inst.Top:CalculateSize();
 end
 
 local function RefreshDealsTab()
@@ -1554,11 +1582,12 @@ local function RefreshDealsTab()
 	m_TabItemIM:ResetInstances();
 	m_TabSideIM:ResetInstances();
 	m_TabDealIM:ResetInstances();
+	m_TabRouteIM:ResetInstances();
 	for _, card in ipairs(cards) do
 		AddTabDeal(card, leader);
 	end
 	for _, route in ipairs(routes) do
-		AddTabRoute(route, leader);
+		AddTabRoute(route);
 	end
 	local panel = m_Tab.panel;
 	panel.TabCards:CalculateSize();
@@ -1604,6 +1633,7 @@ local function InjectDealsTab(playerID)
 		m_TabItemIM:ResetInstances();
 		m_TabSideIM:ResetInstances();
 		m_TabDealIM:ResetInstances();
+		m_TabRouteIM:ResetInstances();
 		m_TabButtonIM:ResetInstances();
 		m_TabPanelIM:ResetInstances();
 
@@ -2143,6 +2173,7 @@ local function Initialize()
 	m_TabDealIM = InstanceManager:new("DealsTabDeal", "Top", Controls.FlowHost);
 	m_TabSideIM = InstanceManager:new("DealsTabSide", "Top", Controls.FlowHost);
 	m_TabItemIM = InstanceManager:new("DealsTabItem", "Top", Controls.FlowHost);
+	m_TabRouteIM = InstanceManager:new("DealsTabRoute", "Top", Controls.FlowHost);
 	ContextPtr:SetUpdate(OnUpdate);
 
 	Controls.CollapseButton:RegisterCallback(Mouse.eLClick, OnToggle);
