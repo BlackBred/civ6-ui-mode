@@ -33,11 +33,11 @@ local m_FlowMy = nil;
 local m_FlowTheir = nil;
 local m_FlowMissLogged = false;
 -- One-time items are already gone from DealManager when the card is drawn, so the
--- contents of the deal table are kept while the deal screen is open (m_Watch) and,
--- once the game reports the deal, per player pair (m_Snaps).
-local m_Snaps = {};
+-- contents of the deal table are kept while the deal screen is open (m_Watch).
 local m_Watch = nil;
-local m_KeyFloor = 0;
+-- The local player's deal record (see DealRecord), loaded once; nil until then.
+local m_Archive = nil;
+local m_PollTick = 0;
 -- The finished deal a notification asked for: { id, turn }. Highlighted in the history,
 -- which is scrolled to it once.
 local m_Focus = nil;
@@ -176,37 +176,20 @@ local function IsNetworkGame()
 	return ok and value == true;
 end
 
--- The gameplay property is written too late to be in the save. The configuration
--- value is written here, in this context, at the moment the deal is accepted.
-local function ReadStored()
-	local property, config = nil, nil;
-	local configOk = false;
-	if Game ~= nil and Game.GetProperty ~= nil then
-		local ok, raw = pcall(Game.GetProperty, Game, DealRecord.PROP);
-		if ok then property = raw end
-	end
-	if GameConfiguration ~= nil and GameConfiguration.GetValue ~= nil then
-		local ok, raw = pcall(GameConfiguration.GetValue, DealRecord.PROP);
-		if ok then
-			config = raw;
-			configOk = true;
-		end
-	end
-	return DealRecord.MergeArchives(property, config), configOk;
+local function CurrentTurn()
+	local ok, turn = pcall(Game.GetCurrentGameTurn);
+	if ok and type(turn) == "number" then return turn end
+	return 0;
 end
 
-local function WriteStored(data, configOk)
-	if IsNetworkGame() then return end
-	local text = DealRecord.EncodeArchive(data);
-	if configOk and GameConfiguration ~= nil and GameConfiguration.SetValue ~= nil then
-		pcall(GameConfiguration.SetValue, DealRecord.PROP, text);
-	end
-	if Game ~= nil and Game.SetProperty ~= nil then
-		pcall(Game.SetProperty, Game, DealRecord.PROP, text);
-	end
+-- The gameplay script's functions, present in single player once that script has loaded.
+local function Exposed(name)
+	if IsNetworkGame() or ExposedMembers == nil or ExposedMembers.UIExt == nil then return nil end
+	return ExposedMembers.UIExt[name];
 end
 
--- Journal in the save (see DealRecord.AppendLog); the counter is shared with the gameplay script.
+-- Journal in the save, kept by the gameplay script (see DealRecord.AppendLog).
+-- The counter is shared with that script.
 local m_Seq = 0;
 
 local function Journal(text)
@@ -219,18 +202,10 @@ local function Journal(text)
 		m_Seq = m_Seq + 1;
 		seq = m_Seq;
 	end
-	local turn = 0;
-	if Game ~= nil and Game.GetCurrentGameTurn ~= nil then
-		local ok, value = pcall(Game.GetCurrentGameTurn);
-		if ok and type(value) == "number" then turn = value end
-	end
-	local line = tostring(seq) .. " t" .. tostring(turn) .. " UI " .. text;
+	local line = tostring(seq) .. " t" .. tostring(CurrentTurn()) .. " UI " .. text;
 	Log(line);
-	if IsNetworkGame() or GameConfiguration == nil or GameConfiguration.GetValue == nil or GameConfiguration.SetValue == nil then
-		return;
-	end
-	local ok, old = pcall(GameConfiguration.GetValue, DealRecord.LOG_UI);
-	if ok then pcall(GameConfiguration.SetValue, DealRecord.LOG_UI, DealRecord.AppendLog(old, line)) end
+	local append = Exposed("AppendJournal");
+	if append ~= nil then pcall(append, line) end
 end
 
 local function DealEnactedTurn(deal)
@@ -259,8 +234,164 @@ local function InstantsFirst(card)
 	end
 end
 
--- Live items, plus one-time items the game already deleted. Those come from the
--- save, and from the snapshot taken when this player just accepted the deal.
+-- ---------------------------------------------------------------------------
+-- Deal record. The game gives a deal no id and forgets it once it ends, so this
+-- context compares the game's list with the record, the way the game's report
+-- screen reads a deal: by its players, its enactment turn and its items.
+-- The gameplay script writes the record into the save and sends notifications.
+-- ---------------------------------------------------------------------------
+-- Text, or a table from a version that saved one.
+local function ArchiveText(key)
+	if Game == nil or Game.GetProperty == nil then return nil end
+	local ok, text = pcall(Game.GetProperty, Game, key);
+	if ok and (type(text) == "string" or type(text) == "table") then return text end
+	return nil;
+end
+
+-- Single player calls the gameplay script directly. A network game sends a player
+-- operation instead: it runs on every machine, so their saves stay the same.
+local function SendToGameplay(direct, operation, value, params)
+	if IsNetworkGame() then
+		if UI ~= nil and UI.RequestPlayerOperation ~= nil and PlayerOperations ~= nil then
+			params.OnStart = operation;
+			pcall(UI.RequestPlayerOperation, LocalPlayerID(), PlayerOperations.EXECUTE_SCRIPT, params);
+		end
+		return;
+	end
+	local fn = Exposed(direct);
+	if fn ~= nil then pcall(fn, LocalPlayerID(), value) end
+end
+
+local function PutRecord(deal)
+	local line = DealRecord.EncodeRecord(deal);
+	SendToGameplay("PutRecord", DealRecord.OP_PUT, line, { uiextLine = line });
+end
+
+local function Announce(deal)
+	local localID = LocalPlayerID();
+	local partner = deal.a == localID and deal.b or deal.a;
+	local message, summary = DealRecord.Notice(deal, localID, LeaderName(partner));
+	local params = {
+		uiextType = DealRecord.NotifyType(deal),
+		uiextMessage = message,
+		uiextSummary = summary,
+		uiextPartner = partner,
+		uiextDealID = deal.id,
+		uiextTurn = deal.turn,
+	};
+	SendToGameplay("Notify", DealRecord.OP_NOTIFY, params, params);
+end
+
+-- Loads the local player's record once. In single player it comes through the gameplay
+-- script, which may load after this context, so until then nothing is tracked.
+local function EnsureArchive()
+	if m_Archive ~= nil then return true end
+	local localID = LocalPlayerID();
+	if localID < 0 then return false end
+	local text;
+	if IsNetworkGame() then
+		text = ArchiveText(DealRecord.ArchiveKey(localID));
+	else
+		local read = Exposed("ReadArchive");
+		if read == nil then return false end
+		local ok, value = pcall(read, localID);
+		text = ok and value or nil;
+	end
+	m_Archive = DealRecord.Normalize(text);
+	if text == nil then
+		-- Earlier versions kept every player's deals under one property and in the configuration.
+		local added = DealRecord.Import(m_Archive, ArchiveText(DealRecord.PROP), localID);
+		local ok, config = pcall(GameConfiguration.GetValue, DealRecord.PROP);
+		for _, deal in ipairs(DealRecord.Import(m_Archive, ok and config or nil, localID)) do
+			table.insert(added, deal);
+		end
+		for _, deal in ipairs(added) do PutRecord(deal) end
+		if #added > 0 then Journal("imported " .. tostring(#added)) end
+	end
+	Journal("loaded deals=" .. tostring(#m_Archive.deals));
+	return true;
+end
+
+-- The deal as the game lists it: its players, the turn it was enacted and its items.
+-- An item the game marks expired no longer counts.
+local function LiveDeal(deal, a, b, now)
+	local items, turn = {}, nil;
+	local ok, iter, state, first = pcall(deal.Items, deal);
+	if ok and iter ~= nil then
+		for item in iter, state, first do
+			if Call(item, "IsExpired") ~= true then
+				local stored = DealRecord.FromItem(item);
+				if stored ~= nil then table.insert(items, stored) end
+				local enacted = Call(item, "GetEnactedTurn");
+				if enacted ~= nil and enacted >= 0 and (turn == nil or enacted < turn) then turn = enacted end
+			end
+		end
+	end
+	return { a = a, b = b, turn = turn or now, items = items };
+end
+
+-- Everyone the local player may have a deal with: the living majors, and the partner of
+-- every running record, so a deal with an eliminated player also ends.
+local function Partners(localID)
+	local ids, seen = {}, {};
+	local function add(id)
+		if id ~= nil and id ~= localID and not seen[id] then
+			seen[id] = true;
+			table.insert(ids, id);
+		end
+	end
+	if PlayerManager ~= nil and PlayerManager.GetAliveMajors ~= nil then
+		local ok, majors = pcall(PlayerManager.GetAliveMajors);
+		for _, player in ipairs(ok and majors or {}) do add(Call(player, "GetID")) end
+	end
+	for _, deal in ipairs(m_Archive ~= nil and m_Archive.deals or {}) do
+		if deal.ended == nil then add(deal.a == localID and deal.b or deal.a) end
+	end
+	table.sort(ids);
+	return ids;
+end
+
+-- The local player's deals as the game lists them, and the pairs the game answered for:
+-- a pair it failed to list ends nothing.
+local function ReadLives(localID)
+	local lives, answered = {}, {};
+	if DealManager == nil or DealManager.GetPlayerDeals == nil then return lives, answered end
+	local now = CurrentTurn();
+	for _, otherID in ipairs(Partners(localID)) do
+		local ok, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
+		if ok and type(deals) == "table" then
+			answered[DealRecord.PairKey(localID, otherID)] = true;
+			for _, deal in ipairs(deals) do
+				table.insert(lives, LiveDeal(deal, localID, otherID, now));
+			end
+		end
+	end
+	return lives, answered;
+end
+
+-- Compares the record with the game's list, stores what changed and announces what ended.
+-- A deal found gone long after it ended (a save first played with this version) is not announced.
+local function Sync(why)
+	if not EnsureArchive() then return end
+	local localID = LocalPlayerID();
+	local lives, answered = ReadLives(localID);
+	local now = CurrentTurn();
+	local changed, finished = DealRecord.Track(m_Archive, lives, answered, now);
+	local notes = {};
+	for _, deal in ipairs(changed) do
+		PutRecord(deal);
+		table.insert(notes, "+" .. DealRecord.Brief(deal));
+	end
+	for _, deal in ipairs(finished) do
+		PutRecord(deal);
+		local announce = deal.ended >= now - 1;
+		if announce then Announce(deal) end
+		table.insert(notes, "end " .. DealRecord.Brief(deal) .. (announce and " notified" or ""));
+	end
+	if #notes > 0 then Journal(why .. " " .. table.concat(notes, "; ")) end
+end
+
+-- Live items, plus one-time items the game already deleted, from the record of the deal.
 local function ReadDeal(deal, localID, otherID)
 	local card = { ours = {}, theirs = {}, shared = {}, localID = localID };
 	local seen = {};
@@ -286,29 +417,10 @@ local function ReadDeal(deal, localID, otherID)
 	end
 
 	local enacted = DealEnactedTurn(deal);
-	local archive = ReadStored();
-	local dealID = Call(deal, "GetID");
-	if dealID ~= nil then
-		for _, archived in ipairs(archive.deals) do
-			if tonumber(archived.id) == tonumber(dealID) then
-				addInstants(archived.items);
-				if enacted == nil and type(archived.turn) == "number" and archived.turn > 0 then
-					enacted = archived.turn;
-				end
-				break;
-			end
-		end
-	end
 	card.turn = enacted;
-
-	if otherID ~= nil then
-		local accepted = DealRecord.AcceptedFor(archive, localID, otherID, enacted, live);
-		if accepted ~= nil then addInstants(accepted.items) end
-	end
-
-	local snap = otherID ~= nil and m_Snaps[DealRecord.PairKey(localID, otherID)] or nil;
-	if snap ~= nil and snap.accepted and enacted ~= nil and enacted == snap.turn and DealRecord.Covers(snap.items, live) then
-		addInstants(snap.items);
+	if m_Archive ~= nil and otherID ~= nil then
+		local record = DealRecord.FindRecord(m_Archive, { a = localID, b = otherID, turn = enacted, items = live });
+		if record ~= nil then addInstants(record.items) end
 	end
 
 	InstantsFirst(card);
@@ -330,6 +442,7 @@ end
 local function GatherDeals(localID, otherID)
 	local cards = {};
 	if DealManager == nil then return cards end
+	EnsureArchive();
 	local ok, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
 	if not ok or deals == nil then return cards end
 	for _, deal in ipairs(deals) do
@@ -350,29 +463,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Finished deals, from the save. The game forgets a deal once it ends.
 -- ---------------------------------------------------------------------------
-local function CurrentTurn()
-	local ok, turn = pcall(Game.GetCurrentGameTurn);
-	if ok and type(turn) == "number" then return turn end
-	return 0;
-end
-
--- nil when the game could not be asked: then nothing may be taken as ended.
-local function LiveIDs(localID, otherID)
-	if DealManager == nil then return nil end
-	local ok, deals = pcall(DealManager.GetPlayerDeals, localID, otherID);
-	if not ok or type(deals) ~= "table" then return nil end
-	local ids = {};
-	for _, deal in ipairs(deals) do
-		local id = Call(deal, "GetID");
-		if id ~= nil then ids[tonumber(id)] = true end
-	end
-	return ids;
-end
-
-local function HistoryCard(deal, localID, archive)
+local function HistoryCard(deal, localID)
 	local card = { ours = {}, theirs = {}, shared = {}, localID = localID };
 	local ended = DealRecord.EndedTurn(deal);
-	local items = DealRecord.FullItems(archive, deal);
+	local items = deal.items;
 	card.history = { start = deal.turn, ended = ended, oneTime = DealRecord.IsOneTime(deal), record = deal, items = items };
 	local seen, seenShared = {}, {};
 	for _, stored in ipairs(items) do
@@ -388,17 +482,10 @@ end
 
 local function GatherHistory(localID, otherID)
 	local cards = {};
-	local live = LiveIDs(localID, otherID);
-	if live == nil then return cards end
-	local archive, configOk = ReadStored();
-	local before = DealRecord.EncodeArchive(archive);
-	if DealRecord.MarkEnded(archive, live, CurrentTurn(), localID, otherID) > 0 then
-		WriteStored(archive, configOk);
-		Journal("history (" .. tostring(localID) .. "," .. tostring(otherID) .. ") -> "
-			.. DealRecord.Changes(DealRecord.DecodeArchive(before), archive));
-	end
-	for _, deal in ipairs(DealRecord.History(archive, localID, otherID, live)) do
-		local card = HistoryCard(deal, localID, archive);
+	Sync("history");
+	if m_Archive == nil then return cards end
+	for _, deal in ipairs(DealRecord.History(m_Archive, localID, otherID)) do
+		local card = HistoryCard(deal, localID);
 		if #card.ours + #card.theirs + #card.shared > 0 then
 			table.insert(cards, card);
 		end
@@ -1618,8 +1705,7 @@ end
 -- ---------------------------------------------------------------------------
 -- What was on the deal table. The game deletes one-time items while it enacts
 -- the deal, before any event reaches this context, so the table is read while
--- the deal screen is open. When the deal is enacted, that copy is written into
--- the save from here, attached to the deal id the game just created.
+-- the deal screen is open. When the deal is enacted, that copy joins its record.
 -- ---------------------------------------------------------------------------
 local function WorkingItems(localID, otherID)
 	if DealManager == nil or DealManager.GetWorkingDeal == nil or DealDirection == nil then return {} end
@@ -1654,85 +1740,6 @@ local function WatchDealTable()
 	};
 end
 
-local function ItemsOfDeal(deal)
-	local list = {};
-	if deal == nil or deal.Items == nil then return list end
-	local ok, iter, state, first = pcall(deal.Items, deal);
-	if not ok or iter == nil then return list end
-	for item in iter, state, first do
-		local stored = DealRecord.FromItem(item);
-		if stored ~= nil then table.insert(list, stored) end
-	end
-	return list;
-end
-
-local function LivesForPair(a, b)
-	local list = {};
-	if DealManager == nil or DealManager.GetPlayerDeals == nil then return list end
-	local ok, deals = pcall(DealManager.GetPlayerDeals, a, b);
-	if not ok or type(deals) ~= "table" then return list end
-	local now = 0;
-	if Game ~= nil and Game.GetCurrentGameTurn ~= nil then
-		local turnOk, turn = pcall(Game.GetCurrentGameTurn);
-		if turnOk and type(turn) == "number" then now = turn end
-	end
-	for _, deal in ipairs(deals) do
-		local id = Call(deal, "GetID");
-		if id ~= nil then
-			table.insert(list, {
-				id = id,
-				a = a,
-				b = b,
-				turn = DealEnactedTurn(deal) or now,
-				items = ItemsOfDeal(deal),
-			});
-		end
-	end
-	return list;
-end
-
-local function IDList(lives)
-	local ids = {};
-	for _, live in ipairs(lives) do table.insert(ids, tostring(live.id)) end
-	return "[" .. table.concat(ids, ",") .. "]";
-end
-
-local function PublishSnapshot(snap)
-	m_Snaps[snap.key] = { turn = snap.turn, items = snap.items, accepted = true };
-	local data, configOk = ReadStored();
-	local before = DealRecord.EncodeArchive(data);
-	local dealKey;
-	dealKey, m_KeyFloor = DealRecord.NewKey(data, LocalPlayerID(), snap.turn, m_KeyFloor);
-	DealRecord.AddAccepted(data, { a = snap.a, b = snap.b, turn = snap.turn, items = snap.items, key = dealKey });
-	local lives = LivesForPair(snap.a, snap.b);
-	data = DealRecord.Remember(data, lives, snap.items, snap.turn, dealKey);
-	-- The configuration is what reliably reaches the save, so every deal gets its own record here too.
-	data = DealRecord.OnSnapshot(data, {
-		a = snap.a, b = snap.b, turn = snap.turn, accepted = 1, items = snap.items, key = dealKey,
-	});
-	WriteStored(data, configOk);
-	Journal("snap (" .. tostring(snap.a) .. "," .. tostring(snap.b) .. ") key=" .. tostring(dealKey) .. " "
-		.. DealRecord.ItemsBrief(snap.items) .. " live=" .. IDList(lives)
-		.. " -> " .. DealRecord.Changes(DealRecord.DecodeArchive(before), data));
-	local payload = {
-		a = snap.a,
-		b = snap.b,
-		turn = snap.turn,
-		accepted = 1,
-		uiextItems = DealRecord.EncodeItems(snap.items),
-		uiextKey = dealKey,
-	};
-	-- In a network game only the player operation may write: it runs on every machine.
-	if not IsNetworkGame() and ExposedMembers ~= nil and ExposedMembers.UIExt ~= nil and ExposedMembers.UIExt.RecordSnapshot ~= nil then
-		pcall(ExposedMembers.UIExt.RecordSnapshot, payload);
-	end
-	if UI ~= nil and UI.RequestPlayerOperation ~= nil and PlayerOperations ~= nil and PlayerOperations.EXECUTE_SCRIPT ~= nil then
-		payload.OnStart = "UIExt_OnDealSnapshot";
-		pcall(UI.RequestPlayerOperation, Game.GetLocalPlayer(), PlayerOperations.EXECUTE_SCRIPT, payload);
-	end
-	Log("snapshot " .. snap.key .. " items=" .. tostring(#snap.items));
-end
-
 local function TakeWatchFor(firstID, secondID)
 	if m_Watch == nil or firstID == nil or secondID == nil then return nil end
 	if m_Watch.key ~= DealRecord.PairKey(firstID, secondID) then return nil end
@@ -1743,6 +1750,119 @@ local function TakeWatchFor(firstID, secondID)
 	local snap = m_Watch;
 	m_Watch = nil;
 	return snap;
+end
+
+-- ---------------------------------------------------------------------------
+-- Diagnostics in the journal: how the diplomacy screen and the deal screen change
+-- around a click on the deal button. Only changes are written, so the journal is
+-- not filled every frame.
+-- ---------------------------------------------------------------------------
+-- "-" no such control, "0" hidden, "1" shown.
+local function Shown(path)
+	local control = ContextPtr:LookUpControl(path);
+	if control == nil or control.IsHidden == nil then return "-" end
+	local ok, hidden = pcall(control.IsHidden, control);
+	if not ok then return "?" end
+	return hidden and "0" or "1";
+end
+
+local ACTION_PATHS = { "/InGame/DiplomacyActionView", "/InGame/Diplomacy/DiplomacyActionView" };
+local DEAL_PATHS = { "/InGame/DiplomacyDealView", "/InGame/Diplomacy/DiplomacyDealView" };
+
+local function ActionViewPath()
+	for _, path in ipairs(ACTION_PATHS) do
+		if ContextPtr:LookUpControl(path) ~= nil then return path end
+	end
+	return nil;
+end
+
+local function ScreenState()
+	local action = ActionViewPath();
+	local bits = {
+		"av=" .. Shown(ACTION_PATHS[1]) .. Shown(ACTION_PATHS[2]),
+		"dv=" .. Shown(DEAL_PATHS[1]) .. Shown(DEAL_PATHS[2]),
+	};
+	if action ~= nil then
+		table.insert(bits, "conv=" .. Shown(action .. "/ConversationContainer"));
+		table.insert(bits, "over=" .. Shown(action .. "/OverviewContainer"));
+		table.insert(bits, "fade=" .. Shown(action .. "/BlackFade"));
+	end
+	local localID = LocalPlayerID();
+	if HasOtherPlayer() and DiplomacyManager ~= nil and DiplomacyManager.FindOpenSessionID ~= nil then
+		local ok, sessionID = pcall(DiplomacyManager.FindOpenSessionID, localID, m_OtherPlayerID);
+		local session = ok and sessionID ~= nil and sessionID >= 0 and sessionID or nil;
+		local from = nil;
+		if session ~= nil and DiplomacyManager.GetSessionInfo ~= nil then
+			local got, info = pcall(DiplomacyManager.GetSessionInfo, session);
+			if got and type(info) == "table" then from = info.FromPlayer end
+		end
+		table.insert(bits, "with=" .. tostring(m_OtherPlayerID) .. " session=" .. tostring(session) .. " from=" .. tostring(from));
+	end
+	table.insert(bits, "open=" .. (m_Open and "1" or "0"));
+	return table.concat(bits, " ");
+end
+
+local m_ScreenState = nil;
+
+local function DiagScreen()
+	local state = ScreenState();
+	if state == m_ScreenState then return end
+	m_ScreenState = state;
+	Journal("diag screen " .. state);
+end
+
+local function KeyName(value)
+	if value == nil or DiplomacyManager == nil or DiplomacyManager.GetKeyName == nil then return tostring(value) end
+	local ok, name = pcall(DiplomacyManager.GetKeyName, value);
+	if ok and name ~= nil then return tostring(name) end
+	return tostring(value);
+end
+
+local function OnDiagStatement(fromID, toID, variants)
+	Try("diag", function()
+		local localID = LocalPlayerID();
+		if fromID ~= localID and toID ~= localID then return end
+		variants = type(variants) == "table" and variants or {};
+		Journal("diag statement " .. tostring(fromID) .. "->" .. tostring(toID)
+			.. " " .. KeyName(variants.StatementType) .. "/" .. KeyName(variants.StatementSubType)
+			.. " response=" .. tostring(variants.ResponseType) .. " session=" .. tostring(variants.SessionID));
+		DiagScreen();
+	end);
+end
+
+local function DiagInput(input)
+	if input == nil or input.GetMessageType == nil or KeyEvents == nil then return end
+	local message = input:GetMessageType();
+	if message == KeyEvents.KeyUp and Keys ~= nil and input:GetKey() == Keys.VK_ESCAPE then
+		Journal("diag escape | " .. ScreenState());
+	elseif MouseEvents ~= nil and message == MouseEvents.LButtonUp then
+		local action = Shown(ACTION_PATHS[1]) .. Shown(ACTION_PATHS[2]);
+		local deal = Shown(DEAL_PATHS[1]) .. Shown(DEAL_PATHS[2]);
+		-- Clicks on the deal screen itself would push the useful lines out of the journal.
+		if action:find("1", 1, true) and not deal:find("1", 1, true) then
+			Journal("diag click | " .. ScreenState());
+		end
+	end
+end
+
+local function RegisterDiagnostics()
+	Events.DiplomacyStatement.Add(OnDiagStatement);
+	Events.DiplomacySessionClosed.Add(function(sessionID)
+		Try("diag", function() Journal("diag session closed " .. tostring(sessionID) .. " | " .. ScreenState()) end);
+	end);
+	Events.LeaderScreenFinishedLoading.Add(function()
+		Try("diag", function() Journal("diag leader loaded | " .. ScreenState()) end);
+	end);
+	LuaEvents.DiploPopup_ShowMakeDeal.Add(function(playerID)
+		Try("diag", function() Journal("diag show deal " .. tostring(playerID) .. " | " .. ScreenState()) end);
+	end);
+	if ContextPtr.SetInputHandler ~= nil then
+		-- Only watches: the input always goes on to the game.
+		ContextPtr:SetInputHandler(function(input)
+			pcall(DiagInput, input);
+			return false;
+		end, true);
+	end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1836,55 +1956,36 @@ local function OnDealsChanged()
 	Try("deals tab", RefreshDealsTab);
 end
 
--- After an enactment the pair's deal list is polled for a while, and the journal
--- notes when a new game deal id shows up in it (see the TODO in docs/ROADMAP.md).
-local PROBE_STEPS = 120;
-local m_Probes = {};
-
-local function StartProbe(firstID, secondID)
-	local key = DealRecord.PairKey(firstID, secondID);
-	local probe = m_Probes[key] or { a = firstID, b = secondID, known = {}, seen = 0 };
-	probe.steps = 0;
-	probe.turn = CurrentTurn();
-	local live = LiveIDs(firstID, secondID) or {};
-	for id in pairs(live) do probe.known[id] = true end
-	m_Probes[key] = probe;
-end
-
-local function ProbeStep()
-	for key, probe in pairs(m_Probes) do
-		probe.steps = probe.steps + 1;
-		local live = LiveIDs(probe.a, probe.b);
-		for id in pairs(live or {}) do
-			if not probe.known[id] then
-				probe.known[id] = true;
-				probe.seen = probe.seen + 1;
-				Journal("seen (" .. tostring(probe.a) .. "," .. tostring(probe.b) .. ") id=" .. tostring(id)
-					.. " step=" .. tostring(probe.steps) .. " enactTurn=" .. tostring(probe.turn));
-			end
-		end
-		if probe.steps >= PROBE_STEPS then
-			if probe.seen == 0 then
-				Journal("probe end (" .. tostring(probe.a) .. "," .. tostring(probe.b) .. ") no new id in "
-					.. tostring(probe.steps) .. " steps");
-			end
-			m_Probes[key] = nil;
-		end
-	end
-end
-
 local function OnDealEnacted(firstID, secondID)
-	Try("snapshot", function()
+	Try("deal record", function()
 		local snap = TakeWatchFor(firstID, secondID);
-		if snap ~= nil then
-			PublishSnapshot(snap);
-		else
-			Journal("enact (" .. tostring(firstID) .. "," .. tostring(secondID) .. ") no snapshot live="
-				.. IDList(LivesForPair(firstID, secondID)));
+		if snap ~= nil and EnsureArchive() then
+			local deal = DealRecord.Accept(m_Archive, snap);
+			if deal ~= nil then
+				PutRecord(deal);
+				Journal("accepted " .. DealRecord.Brief(deal));
+			end
 		end
-		if firstID ~= nil and secondID ~= nil then StartProbe(firstID, secondID) end
+		Sync("enact");
 	end);
 	OnDealsChanged();
+end
+
+-- A deal runs out between turns, and war cancels deals at once; both are seen here.
+local function OnDealsMayHaveEnded(why)
+	Try("deal record", Sync, why);
+	OnDealsChanged();
+end
+
+-- The game may list a new deal, or drop a cancelled one, a moment after its event,
+-- so the record is also compared with the game every few seconds.
+local POLL_STEPS = 60;
+
+local function PollDeals()
+	m_PollTick = m_PollTick + 1;
+	if m_PollTick < POLL_STEPS and m_Archive ~= nil then return end
+	m_PollTick = 0;
+	Sync("poll");
 end
 
 -- Visibility follows the diplomacy screen itself, so no event can leave the panel on the map.
@@ -1921,8 +2022,9 @@ local function OnUpdate()
 			Refresh();
 		end
 	end
+	Try("diag", DiagScreen);
 	Try("watch", WatchDealTable);
-	Try("probe", ProbeStep);
+	Try("deal record", PollDeals);
 	Try("flows", UpdateResourceFlows);
 	Try("deals tab", SyncDealsTab);
 	Try("panel", ApplyVisibility);
@@ -1957,8 +2059,11 @@ local function Initialize()
 	LuaEvents.DiplomacyActionView_ShowIngameUI.Add(OnSceneClosed);
 	LuaEvents.DiploPopup_HideDeal.Add(OnDealsChanged);
 	Events.DiplomacyDealEnacted.Add(OnDealEnacted);
+	Events.LocalPlayerTurnBegin.Add(function() OnDealsMayHaveEnded("turn") end);
+	Events.DiplomacyDeclareWar.Add(function() OnDealsMayHaveEnded("war") end);
 	LuaEvents.DiploScene_RefreshTabs.Add(OnRefreshTabs);
 	LuaEvents.NotificationPanel_UserNotificationActivate.Add(OnUserNotification);
+	Try("diag", RegisterDiagnostics);
 	Log("initialized");
 end
 

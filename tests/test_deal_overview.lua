@@ -139,17 +139,24 @@ test("timed gold and resource deal", function(w)
 	check(cards[1].SharedBody.hidden, "shared block shown for a one-sided deal");
 end);
 
-test("a previously saved table still shows the lump sum", function(w)
-	w:AddDeal(0, 1, { Silk(1, 30, 10) }, 1001);
+test("a table saved by an earlier version still shows the lump sum", function(w)
+	w:AddDeal(0, 1, { Silk(1, 30, 10) });
 	w.properties["UIEXT_DEAL_ARCHIVE"] = {
 		deals = { ["1"] = {
-			id = "1001", turn = "10", a = "0", b = "1",
-			items = { ["1"] = {
-				kind = "GOLD", amount = "100", duration = "0", from = "0",
-				valueType = "-1", subType = "-1", name = "", alliance = false, mutual = false,
-			} },
+			id = "-1", turn = "10", a = "0", b = "1",
+			items = {
+				["1"] = {
+					kind = "GOLD", amount = "100", duration = "0", from = "0",
+					valueType = "-1", subType = "-1", name = "", alliance = false, mutual = false,
+				},
+				["2"] = {
+					kind = "RESOURCES", amount = "1", duration = "30", from = "1",
+					valueType = "1", subType = "-1", name = "", alliance = false, mutual = false,
+				},
+			},
 		} },
 	};
+	w:LoadGameplay();
 	w:Load();
 	w:OpenDiplomacy(1);
 	local card = w:Cards()[1];
@@ -623,26 +630,14 @@ test("deals tab lists a one-time gold gift", function(w)
 end);
 
 test("stripped lump gold is restored from the save", function(w)
-	w:AddDeal(0, 1, { Silk(1, 30, 10) }, 1001);
+	w:AddDeal(0, 1, { Silk(1, 30, 10) });
+	w.properties["UIEXT_DEALS_P0"] = table.concat({
+		"D\t-1\t10\t0\t1\tGOLD/100/0/0/-1/-1//;RESOURCES/1/30/1/1/-1//\t",
+		"D\t-2\t4\t0\t1\tGOLD/7/0/0/-1/-1//\t",
+		"N\t-2",
+	}, "~");
+	w:LoadGameplay();
 	w:Load();
-	w.env.Game:SetProperty(w.env.DealRecord.PROP, {
-		deals = {
-			{
-				id = 1001, turn = 10, a = 0, b = 1,
-				items = {
-					{ kind = "GOLD", amount = 100, duration = 0, from = 0, valueType = -1, subType = -1, name = "", alliance = false, mutual = false },
-					{ kind = "RESOURCES", amount = 1, duration = 30, from = 1, valueType = 1, subType = -1, name = "", alliance = false, mutual = false },
-				},
-			},
-			{
-				id = 1002, turn = 4, a = 0, b = 1,
-				items = {
-					{ kind = "GOLD", amount = 7, duration = 0, from = 0, valueType = -1, subType = -1, name = "", alliance = false, mutual = false },
-				},
-			},
-		},
-		pending = {}, missed = {}, next = 0,
-	});
 	w:OpenDiplomacy(1);
 	local card = w:Cards()[1];
 	eq(#w:Cards(), 1, "expired archive deal is not a card");
@@ -676,29 +671,33 @@ local function AcceptGoldForSilk(w)
 	w.working = { a = 0, b = 1, items = { Gold(0, 100, 0), Gold(0, 10, 30), Silk(1, 30) } };
 	w:OpenDeal();
 	w.working = nil;
-	w:AddDeal(0, 1, { Gold(0, 10, 30, 35), Silk(1, 30, 35) }, 1006);
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 35), Silk(1, 30, 35) });
 	w.Events.DiplomacyDealEnacted(0, 1);
 end
 
+-- The local player's record as the save holds it.
+local function Saved(w)
+	local raw = w.properties["UIEXT_DEALS_P0"];
+	check(type(raw) == "string", "record is stored as text");
+	return w.env.DealRecord.Normalize(raw);
+end
+
 local function StoredKinds(w)
-	local raw = w.properties["UIEXT_DEAL_ARCHIVE"];
-	check(type(raw) == "string", "archive is stored as text");
-	local saved = w.env.DealRecord.Normalize(raw);
+	local saved = Saved(w);
 	local kinds = {};
 	for _, item in ipairs(saved.deals[1].items) do
 		table.insert(kinds, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
 	end
 	table.sort(kinds);
-	return #saved.deals, saved.deals[1].id, table.concat(kinds, ",");
+	return #saved.deals, table.concat(kinds, ",");
 end
 
 test("accepting a deal keeps the lump sum that the game strips", function(w)
 	w:LoadGameplay();
 	w:Load();
 	AcceptGoldForSilk(w);
-	local count, id, kinds = StoredKinds(w);
+	local count, kinds = StoredKinds(w);
 	eq(count, 1, "stored deals");
-	eq(id, 1006, "deal id");
 	eq(kinds, "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "stored items");
 	local card = w:Cards()[1];
 	eq(card.Header.text, "Turns left: 30 · since turn 35", "header");
@@ -707,13 +706,13 @@ test("accepting a deal keeps the lump sum that the game strips", function(w)
 	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "theirs");
 end);
 
-test("the lump sum is stored when the interface hears of the deal first", function(w)
+test("the lump sum is stored when the interface loads before the gameplay script", function(w)
 	w:Load();
+	w:Tick(10);
 	w:LoadGameplay();
 	AcceptGoldForSilk(w);
-	local count, id, kinds = StoredKinds(w);
+	local count, kinds = StoredKinds(w);
 	eq(count, 1, "stored deals");
-	eq(id, 1006, "deal id");
 	eq(kinds, "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "stored items");
 end);
 
@@ -741,33 +740,27 @@ test("after loading the save both views still show the lump sum", function(w)
 	eq(table.concat(deal.sides[2].items, "|"), "1 [ICON_RESOURCE_SILK] Silk", "tab theirs");
 end);
 
-test("one-time items show after a load that kept only the configuration", function(w)
+-- Earlier versions kept the record in one property for every player, with the
+-- one-time items of a lasting deal as a separate accepted deal table, and a copy in
+-- the configuration.
+test("the record of an earlier version is carried over once", function(w)
+	w.turn = 40;
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 35), Silk(1, 30, 35) });
+	w.config["UIEXT_DEAL_ARCHIVE"] = table.concat({
+		"D\t1006\t35\t0\t1\tGOLD/10/30/0/-1/-1//;RESOURCES/1/30/1/1/-1//\t",
+		"D\t-1\t30\t1\t2\tGOLD/5/0/2/-1/-1//\t",
+		"A\t35\t0\t1\tGOLD/100/0/0/-1/-1//;GOLD/10/30/0/-1/-1//;RESOURCES/1/30/1/1/-1//\tp0t35n1",
+		"N\t-1",
+	}, "~");
 	w:LoadGameplay();
 	w:Load();
-	AcceptGoldForSilk(w);
-	local saved = w.config[w.env.DealRecord.PROP];
-	check(type(saved) == "string", "configuration archive");
-	local stored = w.env.DealRecord.Normalize(saved);
-	local kinds = {};
-	for _, item in ipairs(stored.deals[1].items) do
-		table.insert(kinds, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
-	end
-	table.sort(kinds);
-	eq(table.concat(kinds, ","), "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "configuration keeps the lump sum");
-	w.properties[w.env.DealRecord.PROP] = nil;
-	w.config[w.env.DealRecord.PROP] = nil;
-	w.turn = 40;
+	w:Tick(10);
+	local saved = Saved(w);
+	eq(#saved.deals, 1, "only the local player's deal");
+	w.config["UIEXT_DEAL_ARCHIVE"] = "D\t-5\t20\t0\t1\tGOLD/9/0/0/-1/-1//\t~N\t-5";
 	w:Reload();
-	local dropped = w.env.DealRecord.Normalize(w.properties[w.env.DealRecord.PROP]);
-	local lasting = {};
-	for _, item in ipairs(dropped.deals[1].items) do
-		table.insert(lasting, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
-	end
-	table.sort(lasting);
-	eq(table.concat(lasting, ","), "GOLD:10:30,RESOURCES:1:30", "property without the configuration");
-	w.config[w.env.DealRecord.PROP] = saved;
-	w.managers = {};
-	w:Load();
+	w:Tick(10);
+	eq(#Saved(w).deals, 1, "not carried over again");
 	w:OpenDiplomacy(1);
 	w:OpenDeal();
 	local card = w:Cards()[1];
@@ -779,8 +772,7 @@ test("one-time items show after a load that kept only the configuration", functi
 	eq(table.concat(deal.sides[1].items, "|"), "100 [ICON_GOLD] · one-time|10 [ICON_GOLD] per turn", "tab ours");
 end);
 
--- As in the turn 98 save: the interface heard of deal 1006 before the game listed
--- it, and the save kept only the configuration value, which held no deal at all.
+-- As in the turn 98 save: the game listed the deal only after its event.
 test("one-time gold survives a load when the deal is listed only after the event", function(w)
 	w:LoadGameplay();
 	w:Load();
@@ -790,12 +782,11 @@ test("one-time gold survives a load when the deal is listed only after the event
 	w:OpenDeal();
 	w.working = nil;
 	w.Events.DiplomacyDealEnacted(0, 1);
-	w:AddDeal(0, 1, { Gold(0, 10, 30, 98) }, 1006);
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 98) });
+	w:Tick(5 * 60);
 	w:CloseDeal();
 	w:CloseDiplomacy();
-	local saved = w.config[w.env.DealRecord.PROP];
-	check(type(saved) == "string" and saved:find("GOLD/100/0", 1, true) ~= nil, "configuration holds the lump sum: " .. tostring(saved));
-	w.properties = {};
+	eq(#Saved(w).deals, 1, "one record for the deal");
 	w.turn = 99;
 	w:Reload();
 	w.managers = {};
@@ -821,16 +812,15 @@ test("two deals with one leader in one turn keep their own one-time items after 
 	w:OpenDeal();
 	w.working = nil;
 	w.Events.DiplomacyDealEnacted(0, 1);
-	w:AddDeal(0, 1, { Gold(0, 10, 30, 99) }, 1007);
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 99) });
 	w:CloseDeal();
 	w.working = { a = 0, b = 1, items = { { type = "DIPLOMATIC_FAVOR", from = 0, amount = 1, duration = 0 }, Gold(0, 1, 30) } };
 	w:OpenDeal();
 	w.working = nil;
 	w.Events.DiplomacyDealEnacted(0, 1);
-	w:AddDeal(0, 1, { Gold(0, 1, 30, 99) }, 1009);
+	w:AddDeal(0, 1, { Gold(0, 1, 30, 99) });
 	w:CloseDeal();
 	w:CloseDiplomacy();
-	w.properties = {};
 	w:Reload();
 	w.managers = {};
 	w:Load();
@@ -854,9 +844,9 @@ test("a deal table left without a deal is not attached to a later one", function
 	w.working = nil;
 	w:CloseDeal();
 	w:OpenDeal();
-	w:AddDeal(0, 1, { Silk(1, 30, 35) }, 1007);
+	w:AddDeal(0, 1, { Silk(1, 30, 35) });
 	w.Events.DiplomacyDealEnacted(0, 1);
-	local _, _, kinds = StoredKinds(w);
+	local _, kinds = StoredKinds(w);
 	eq(kinds, "RESOURCES:1:30", "stored items");
 	eq(w:Cards()[1].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "card");
 end);
@@ -887,13 +877,14 @@ end);
 
 test("history shows finished deals with their turns and years", function(w)
 	w.turn = 50;
-	w:AddDeal(0, 1, { Gold(0, 5, 30, 45) }, 1003);
-	w.properties["UIEXT_DEAL_ARCHIVE"] = table.concat({
-		"D\t1001\t10\t0\t1\tGOLD/100/0/0/-1/-1//;RESOURCES/1/30/1/1/-1//\t",
-		"D\t1002\t20\t0\t1\tGOLD/40/0/1/-1/-1//\t",
-		"D\t1004\t12\t0\t1\tGOLD/3/30/0/-1/-1//;RESOURCES/1/10/1/1/-1//\t30",
-		"N\t0",
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 45) });
+	w.properties["UIEXT_DEALS_P0"] = table.concat({
+		"D\t-1\t10\t0\t1\tGOLD/100/0/0/-1/-1//;RESOURCES/1/30/1/1/-1//\t",
+		"D\t-2\t20\t0\t1\tGOLD/40/0/1/-1/-1//\t",
+		"D\t-4\t12\t0\t1\tGOLD/3/30/0/-1/-1//;RESOURCES/1/10/1/1/-1//\t30",
+		"N\t-4",
 	}, "~");
+	w:LoadGameplay();
 	w:Load();
 	w:OpenDiplomacy(1);
 	w:OpenDeal();
@@ -908,9 +899,9 @@ test("history shows finished deals with their turns and years", function(w)
 	eq(cards[2].TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk · until turn 22", "line that ended earlier");
 	eq(cards[3].Header.text, "One-time, on turn 20 (3200 BC)", "one-time exchange");
 	eq(cards[3].TheirsOnceBody.text, "40 [ICON_GOLD]", "one-time gold");
-	local saved = w.env.DealRecord.Normalize(w.config["UIEXT_DEAL_ARCHIVE"]);
-	eq(w.env.DealRecord.FindID(saved, 1001).ended, 40, "end turn written to the save");
-	eq(w.env.DealRecord.FindID(saved, 1003), nil, "running deal not in history");
+	local saved = Saved(w);
+	eq(w.env.DealRecord.FindID(saved, -1).ended, 40, "end turn written to the save");
+	eq(#saved.deals, 4, "the running deal is recorded too");
 end);
 
 -- As in DiplomacyDeals.log, turn 92: a trade and two gifts with one leader in one turn.
@@ -946,8 +937,9 @@ test("gifts made after a trade in the same turn reach the history", function(w)
 	eq(TradeAndTwoGifts(w), "100 [ICON_GOLD]| ; 100 [ICON_GOLD]|20 [ICON_FAVOR] ; 60 [ICON_GOLD]|", "history");
 end);
 
-test("gifts reach the history when the interface hears of each deal first", function(w)
+test("gifts reach the history when the interface loads before the gameplay script", function(w)
 	w:Load();
+	w:Tick(10);
 	w:LoadGameplay();
 	eq(TradeAndTwoGifts(w), "100 [ICON_GOLD]| ; 100 [ICON_GOLD]|20 [ICON_FAVOR] ; 60 [ICON_GOLD]|", "history");
 end);
@@ -983,58 +975,62 @@ test("two equal gifts in one turn are two history cards, also after a load", fun
 	eq(HistoryAfterReload(w), "60 [ICON_GOLD] ; 60 [ICON_GOLD]", "history");
 end);
 
-test("two equal gifts are two cards when the interface hears of each deal first", function(w)
-	w:Load();
-	w:LoadGameplay();
-	TwoEqualGifts(w);
-	eq(HistoryAfterReload(w), "60 [ICON_GOLD] ; 60 [ICON_GOLD]", "history");
-end);
-
-test("two equal gifts are two cards with only the configuration saved", function(w)
-	w:LoadGameplay();
-	w:Load();
-	TwoEqualGifts(w);
-	w.properties = {};
-	eq(HistoryAfterReload(w), "60 [ICON_GOLD] ; 60 [ICON_GOLD]", "history");
-end);
-
-test("the journal notes when a new deal shows up in the game's list", function(w)
+test("the journal in the save says what the record took from the game", function(w)
 	w:LoadGameplay();
 	w:Load();
 	w.turn = 90;
 	w:OpenDiplomacy(1);
-	w.working = { a = 0, b = 1, items = { Silk(0, 30) } };
+	w.working = { a = 0, b = 1, items = { Silk(0, 30), Gold(1, 50, 0) } };
 	w:OpenDeal();
 	w.working = nil;
 	w.Events.DiplomacyDealEnacted(0, 1);
-	w:Tick(10);
-	w:AddDeal(0, 1, { Silk(0, 30, 90) }, 1005);
-	w:Tick(10);
-	local journal = w.config[w.env.DealRecord.LOG_UI];
-	check(journal:find("t90 UI snap (0,1) key=p0t90n1 [RESOURCES1/30<0] live=[]", 1, true), "snapshot: " .. journal);
-	check(journal:find("UI seen (0,1) id=1005 step=", 1, true), "deal listed later: " .. journal);
-	check(w.properties[w.env.DealRecord.LOG_GAMEPLAY]:find("GP enact (0,1) live=[]", 1, true), "gameplay journal");
+	w:AddDeal(0, 1, { Silk(0, 30, 90) });
+	w:Tick(5 * 60);
+	w.deals = {};
+	w.turn = 95;
+	w.Events.LocalPlayerTurnBegin();
+	local journal = w.properties[w.env.DealRecord.LOG_GAMEPLAY];
+	check(journal:find("t90 UI accepted -1(0,1)t90[RESOURCES1/30<0,GOLD50/0<1]", 1, true), "deal table: " .. journal);
+	check(journal:find("t95 UI turn end -1(0,1)t90[RESOURCES1/30<0,GOLD50/0<1] ended=95 notified", 1, true), "end: " .. journal);
+	eq(#Saved(w).deals, 1, "the listed deal is the accepted one");
 end);
 
-test("the journal notes a deal that never shows up in the list", function(w)
+test("interface diagnostics land in the gameplay journal", function(w)
+	w:LoadGameplay();
 	w:Load();
+	w:Tick(10);
+	local function journal() return w.properties[w.env.DealRecord.LOG_GAMEPLAY] end
 	w:OpenDiplomacy(1);
-	w.Events.DiplomacyDealEnacted(0, 1);
-	w:Tick(5 * 120);
-	local journal = w.config[w.env.DealRecord.LOG_UI];
-	check(journal:find("UI enact (0,1) no snapshot live=[]", 1, true), "enactment: " .. journal);
-	check(journal:find("UI probe end (0,1) no new id in 120 steps", 1, true), "probe end: " .. journal);
+	check(journal():find("UI diag screen av=1- dv=0- conv=- over=- fade=- with=1 session=nil from=nil open=1", 1, true),
+		"diplomacy opened: " .. journal());
+	w.Events.DiplomacyStatement(0, 1, { StatementType = 5, SessionID = 7 });
+	check(journal():find("UI diag statement 0->1 5/nil response=nil session=7", 1, true), "statement: " .. journal());
 end);
 
-test("history ends nothing when the game cannot be asked", function(w)
-	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\tRESOURCES/1/30/1/1/-1//\t~N\t0";
+test("nothing ends when the game cannot be asked", function(w)
+	w.properties["UIEXT_DEALS_P0"] = "D\t-1\t10\t0\t1\tRESOURCES/1/30/1/1/-1//\t~N\t-1";
+	w.failDeals = true;
+	w:LoadGameplay();
 	w:Load();
 	w:OpenDiplomacy(1);
 	w:OpenDeal();
-	w.failDeals = true;
 	w.Controls.HistoryTab:Click();
+	w.Events.LocalPlayerTurnBegin();
 	eq(#w:Cards(), 0, "history card count");
-	eq(w.config["UIEXT_DEAL_ARCHIVE"], nil, "nothing written");
+	eq(Saved(w).deals[1].ended, nil, "still running");
+end);
+
+test("an item the game marks expired no longer keeps the deal running", function(w)
+	w.turn = 30;
+	w:AddDeal(0, 1, { Silk(1, 30, 10) });
+	w:LoadGameplay();
+	w:Load();
+	w:Tick(10);
+	w.deals[1].items[1].expired = true;
+	w.turn = 40;
+	w.Events.LocalPlayerTurnBegin();
+	eq(Saved(w).deals[1].ended, 40, "ended");
+	eq(#w.notifications, 1, "announced");
 end);
 
 test("failing deal API leaves the luxury list untouched", function(w)
@@ -1063,12 +1059,13 @@ end
 
 local function HistoryReady(w)
 	w.turn = 50;
-	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t40~N\t0";
+	w.properties["UIEXT_DEALS_P0"] = "D\t-1\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t40~N\t-1";
 	w:Wallet(0).resources[1] = 1;
 	w:Wallet(0).gold = 10;
 	w:Wallet(1).resources[3] = 2;
 	w:Wallet(1).gold = 150;
 	w:Wallet(1).perTurn = 4;
+	w:LoadGameplay();
 	w:Load();
 	w:OpenDiplomacy(1);
 	w.working = { a = 0, b = 1, items = { Gold(0, 7, 0) } };
@@ -1127,13 +1124,14 @@ test("agreements go back on the table, a shared one once", function(w)
 	w.turn = 50;
 	w.gameText["LOC_OPEN_BORDERS"] = "Open Borders";
 	w.gameText["LOC_DEFENSIVE_PACT"] = "Defensive Pact";
-	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\t"
+	w.properties["UIEXT_DEALS_P0"] = "D\t-1\t10\t0\t1\t"
 		.. "AGREEMENTS/0/30/0/-1/1//LOC_OPEN_BORDERS;AGREEMENTS/0/30/1/-1/1//LOC_OPEN_BORDERS;"
-		.. "AGREEMENTS/0/30/0/-1/3/m/LOC_DEFENSIVE_PACT;AGREEMENTS/0/30/1/-1/3/m/LOC_DEFENSIVE_PACT\t40~N\t0";
+		.. "AGREEMENTS/0/30/0/-1/3/m/LOC_DEFENSIVE_PACT;AGREEMENTS/0/30/1/-1/3/m/LOC_DEFENSIVE_PACT\t40~N\t-1";
 	for _, from in ipairs({ 0, 1 }) do
 		table.insert(w.possible, { from = from, type = "AGREEMENTS", SubType = 1 });
 		table.insert(w.possible, { from = from, type = "AGREEMENTS", SubType = 3 });
 	end
+	w:LoadGameplay();
 	w:Load();
 	w:OpenDiplomacy(1);
 	w.working = { a = 0, b = 1, items = {} };
@@ -1162,23 +1160,27 @@ end);
 -- ---------------------------------------------------------------------------
 -- Notification that a deal finished
 -- ---------------------------------------------------------------------------
-local function RunningSilkForSpices(w, extraArchive)
+local function RunningSilkForSpices(w)
 	w.turn = 39;
-	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t" .. (extraArchive or "") .. "~N\t0";
-	w:AddDeal(0, 1, { Silk(0, 30, 10), Spice(1, 30, 10), Gold(1, 1, 30, 10) }, 1001);
+	w.properties["UIEXT_DEALS_P0"] = "D\t-1\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t~N\t-1";
+	w:AddDeal(0, 1, { Silk(0, 30, 10), Spice(1, 30, 10), Gold(1, 1, 30, 10) });
 	w:LoadGameplay();
+	w:Load();
+	w:Tick(10);
 end
 
+-- Between turns the game drops the deal; the next turn begins for the local player.
 local function EndTurn(w, turn)
 	w.deals = {};
 	w.turn = turn;
-	w.Events.TurnBegin(turn);
+	w.Events.LocalPlayerTurnBegin();
 end
 
-test("a deal that ran out is announced to the human side with what changed hands", function(w)
+test("a deal that ran out is announced with what changed hands", function(w)
 	RunningSilkForSpices(w);
+	eq(#w.notifications, 0, "nothing while it runs");
 	EndTurn(w, 40);
-	eq(#w.notifications, 1, "notifications: only the human side");
+	eq(#w.notifications, 1, "notifications");
 	local sent = w.notifications[1];
 	eq(sent.player, 0, "player");
 	eq(sent.type, 509, "user-defined type");
@@ -1187,38 +1189,63 @@ test("a deal that ran out is announced to the human side with what changed hands
 		.. "You received: 1 [ICON_RESOURCE_SPICES] Spices, 103 [ICON_GOLD] · one-time, 1 [ICON_GOLD] per turn[NEWLINE]"
 		.. "Click to open the deal history with this leader.", "text");
 	eq(sent.params.UIExtPartner, 1, "partner");
-	eq(sent.params.UIExtDealID, 1001, "deal");
+	eq(sent.params.UIExtDealID, -1, "deal");
 	EndTurn(w, 41);
 	eq(#w.notifications, 1, "announced once");
+	w:Reload();
+	w:Tick(10);
+	eq(#w.notifications, 1, "not again after a load");
 end);
 
-test("a deal cut short says it ended, and both humans hear of it", function(w)
-	w:Wallet(1).human = true;
+test("a deal cut short by war says it ended, as soon as the game drops it", function(w)
 	RunningSilkForSpices(w);
-	EndTurn(w, 25);
-	eq(#w.notifications, 2, "notifications");
-	eq(w.notifications[1].params.Message, "Deal with Gandhi ended", "first side");
-	eq(w.notifications[2].params.Message, "Deal with Peter ended", "second side");
-	check(w.notifications[2].params.Summary:find("You gave: 1 [ICON_RESOURCE_SPICES] Spices, 103", 1, true),
-		"second side's view: " .. w.notifications[2].params.Summary);
+	w.turn = 25;
+	w.deals = {};
+	w.Events.DiplomacyDeclareWar(0, 1);
+	eq(#w.notifications, 1, "notifications");
+	eq(w.notifications[1].type, 508, "broken-deal type");
+	eq(w.notifications[1].params.Message, "Deal with Gandhi ended", "title");
+	eq(Saved(w).deals[1].ended, 25, "end turn in the save");
+end);
+
+test("a deal the game drops a moment after the war event is still caught", function(w)
+	RunningSilkForSpices(w);
+	w.turn = 25;
+	w.Events.DiplomacyDeclareWar(0, 1);
+	w.deals = {};
+	w:Tick(5 * 60);
+	eq(#w.notifications, 1, "notifications");
 end);
 
 test("a deal found gone long after its term is not announced", function(w)
 	RunningSilkForSpices(w);
 	EndTurn(w, 60);
 	eq(#w.notifications, 0, "notifications");
+	eq(Saved(w).deals[1].ended, 40, "it still ends with its term");
+end);
+
+test("in a network game the record and the notification go through player operations", function(w)
+	w.network = true;
+	RunningSilkForSpices(w);
+	EndTurn(w, 40);
+	eq(#w.notifications, 1, "notifications");
+	eq(Saved(w).deals[1].ended, 40, "end turn in the save");
+	local kinds = {};
+	for _, op in ipairs(w.operations) do kinds[op.params.OnStart] = true end
+	check(kinds.UIExt_PutDealRecord and kinds.UIExt_NotifyDealEnded, "operations");
 end);
 
 test("clicking the notification opens the deal screen on the history at that deal", function(w)
-	w:Load();
 	w.turn = 39;
-	w.properties["UIEXT_DEAL_ARCHIVE"] = table.concat({
-		"D\t1000\t5\t0\t1\tGOLD/3/20/0/-1/-1//\t25",
-		"D\t1001\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t",
-		"N\t0",
+	w.properties["UIEXT_DEALS_P0"] = table.concat({
+		"D\t-1\t5\t0\t1\tGOLD/3/20/0/-1/-1//\t25",
+		"D\t-2\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t",
+		"N\t-2",
 	}, "~");
-	w:AddDeal(0, 1, { Silk(0, 30, 10), Spice(1, 30, 10), Gold(1, 1, 30, 10) }, 1001);
+	w:AddDeal(0, 1, { Silk(0, 30, 10), Spice(1, 30, 10), Gold(1, 1, 30, 10) });
 	w:LoadGameplay();
+	w:Load();
+	w:Tick(10);
 	EndTurn(w, 40);
 	eq(#w.notifications, 1, "notifications");
 	w.working = { a = 0, b = 1, items = { Gold(0, 7, 0) } };

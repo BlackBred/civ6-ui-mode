@@ -289,8 +289,11 @@ function World:Wallet(playerID)
 	return wallet;
 end
 
-local function NewItem(spec, w)
+-- index: the item's place in its deal. As in the game, an item id counts within one deal only.
+local function NewItem(spec, w, index)
 	local item = {};
+	function item:GetID() return index or 0 end
+	function item:IsExpired() return spec.expired == true end
 	function item:GetType() return DEAL_ITEM_TYPES[spec.type] end
 	function item:GetAmount() return spec.amount or 0 end
 	function item:GetDuration() return spec.duration or 0 end
@@ -306,8 +309,10 @@ local function NewItem(spec, w)
 	if spec.subTypeName ~= nil then
 		function item:GetSubTypeNameID() return spec.subTypeName end
 	end
-	if spec.endTurn ~= nil then
-		function item:GetEndTurn() return spec.endTurn end
+	function item:GetEndTurn()
+		if spec.endTurn ~= nil then return spec.endTurn end
+		if spec.enacted ~= nil and (spec.duration or 0) > 0 then return spec.enacted + spec.duration end
+		return -1;
 	end
 	function item:SetAmount(v) spec.amount = v end
 	function item:SetDuration(v) spec.duration = v end
@@ -323,15 +328,18 @@ local function NewItem(spec, w)
 	return item;
 end
 
+-- As in the game, a deal has no id of its own (see the method list in the journal of the turn 98 save).
 local function NewDeal(spec, w)
 	local deal = {};
-	function deal:GetID() return spec.id end
+	function deal:GetPlayer1ID() return spec.a end
+	function deal:GetPlayer2ID() return spec.b end
+	function deal:GetItemCount() return #spec.items end
 	function deal:Items()
 		local i = 0;
 		return function()
 			i = i + 1;
 			if spec.items[i] == nil then return nil end
-			return NewItem(spec.items[i], w);
+			return NewItem(spec.items[i], w, i - 1);
 		end
 	end
 	function deal:AddItemOfType(itemType, from)
@@ -354,7 +362,9 @@ function World:Lookup(key, ...)
 	end));
 end
 
-function World:Environment()
+-- gameplay: a gameplay script's context. There the game lists no deals at all (journal
+-- of the turn 98 save), and there is no UI table.
+function World:Environment(gameplay)
 	local w = self;
 	local InstanceManager = {};
 	InstanceManager.__index = InstanceManager;
@@ -468,7 +478,7 @@ function World:Environment()
 		GameConfiguration = {
 			GetValue = function(key) return w.config[key] end,
 			SetValue = function(key, value) w.config[key] = value end,
-			IsNetworkMultiplayer = function() return false end,
+			IsNetworkMultiplayer = function() return w.network == true end,
 		},
 		PlayerConfigurations = players,
 		PlayerManager = {
@@ -497,12 +507,13 @@ function World:Environment()
 				return { GetValue = function(_, key) return sent.params[key] end };
 			end,
 		},
-		NotificationTypes = { USER_DEFINED_9 = 509 },
+		NotificationTypes = { USER_DEFINED_8 = 508, USER_DEFINED_9 = 509 },
 		ParameterTypes = { MESSAGE = "Message", SUMMARY = "Summary" },
 		DealManager = {
 			GetPlayerDeals = function(a, b)
 				if w.failDeals then error("GetPlayerDeals failed") end
 				local list = {};
+				if gameplay then return list end
 				for _, d in ipairs(w.deals) do
 					if (d.a == a and d.b == b) or (d.a == b and d.b == a) then
 						table.insert(list, NewDeal(d, w));
@@ -538,8 +549,12 @@ function World:Environment()
 			GetColorValue = function(r, g, b, a)
 				return string.format("%.2f,%.2f,%.2f,%.2f", r, g, b, a or 1);
 			end,
+			-- As in the game: EXECUTE_SCRIPT raises GameEvents[OnStart](player, params) in the gameplay script.
 			RequestPlayerOperation = function(player, op, params)
 				table.insert(w.operations, { player = player, op = op, params = params });
+				if op == 1 and params ~= nil and params.OnStart ~= nil then
+					w.GameEvents[params.OnStart](player, params);
+				end
 			end,
 			PlaySound = function(name) table.insert(w.sounds, name) end,
 		},
@@ -554,11 +569,12 @@ function World:Environment()
 	};
 end
 
-function World:OpenEnv(file)
+function World:OpenEnv(file, gameplay)
 	self.LuaEvents = self.LuaEvents or EventTable();
 	self.Events = self.Events or EventTable();
 	self.GameEvents = self.GameEvents or EventTable();
-	local env = self:Environment();
+	local env = self:Environment(gameplay);
+	if gameplay then env.UI = nil end
 	setmetatable(env, { __index = _G });
 	local chunk = assert(loadfile(file));
 	setfenv(chunk, env);
@@ -587,7 +603,7 @@ function World:Reload()
 end
 
 function World:LoadGameplay()
-	self.gameplay = self:OpenEnv(self.modDir .. "/Scripts/DealArchive.lua");
+	self.gameplay = self:OpenEnv(self.modDir .. "/Scripts/DealArchive.lua", true);
 	return self;
 end
 

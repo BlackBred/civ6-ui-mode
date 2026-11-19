@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The game has no icon for its user-defined notification types. The finished-deal
-     notification (DealRecord.NOTIFY_TYPE) borrows the game's own deal-expired icon. -->
+<!-- The game has no icon for its user-defined notification types.
+     USER_DEFINED_9 (DealRecord.NOTIFY_TYPE) is a deal that ran its term: the deal-expired icon.
+     USER_DEFINED_8 (DealRecord.NOTIFY_BROKEN_TYPE) is a deal cut short: the broken-promise icon.
+     The pirate scenario also claims slot 8, and only while that scenario is loaded. -->
 <GameInfo>
 	<IconDefinitions>
 		<Replace Name="ICON_NOTIFICATION_USER_DEFINED_9" Atlas="ICON_ATLAS_NOTIFICATIONS" Index="85"/>
+		<Replace Name="ICON_NOTIFICATION_USER_DEFINED_8" Atlas="ICON_ATLAS_NOTIFICATIONS" Index="102"/>
 	</IconDefinitions>
 </GameInfo>
