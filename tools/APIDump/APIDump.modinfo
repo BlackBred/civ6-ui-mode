@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Mod id="9d4e7b21-3c58-4a6f-b0e2-71f5c8a93d64" version="1">
+  <Properties>
+    <Name>UI Extender: API Dump (debug)</Name>
+    <Description>Debug only. Writes the Lua API visible to UI and gameplay scripts, and the arguments of the first firings of every event, to Lua.log. Do not enable in normal games.</Description>
+    <Authors>UI Extender</Authors>
+    <CompatibleVersions>1.2,2.0</CompatibleVersions>
+    <AffectsSavedGames>0</AffectsSavedGames>
+  </Properties>
+  <InGameActions>
+    <ImportFiles id="APIDump_Core">
+      <File>Scripts/APIDumpCore.lua</File>
+    </ImportFiles>
+    <AddUserInterfaces id="APIDump_UI">
+      <Properties>
+        <Context>InGame</Context>
+      </Properties>
+      <File>UI/APIDump.xml</File>
+    </AddUserInterfaces>
+    <AddGameplayScripts id="APIDump_Gameplay">
+      <File>Scripts/APIDumpGameplay.lua</File>
+    </AddGameplayScripts>
+  </InGameActions>
+  <Files>
+    <File>Scripts/APIDumpCore.lua</File>
+    <File>Scripts/APIDumpGameplay.lua</File>
+    <File>UI/APIDump.xml</File>
+    <File>UI/APIDump.lua</File>
+  </Files>
+</Mod>
