@@ -18,9 +18,10 @@ local function Items(w, name, parent)
 end
 
 -- What the deals tab shows: { header, sides = { { title, items = { text, ... } } } } per deal.
-local function TabDeals(w, panel)
+-- list: the stack to read, the deals by default.
+local function TabDeals(w, panel, list)
 	local deals = {};
-	for _, deal in ipairs(Items(w, "DealsTabDeal", panel.TabCards)) do
+	for _, deal in ipairs(Items(w, "DealsTabDeal", list or panel.TabCards)) do
 		local entry = { header = deal.Header.text, sides = {} };
 		for _, side in ipairs(Items(w, "DealsTabSide", deal.Sides)) do
 			local title, anchor = nil, nil;
@@ -615,6 +616,48 @@ test("reused side blocks show only their own title", function(w)
 	local deal = TabDeals(w, panel)[1];
 	eq(#deal.sides, 1, "side count");
 	eq(deal.sides[1].title, "Gandhi gives", "title");
+end);
+
+test("deals tab lists trade routes both ways under the deals", function(w)
+	w.players[2] = { leader = "Cleopatra", civ = "Egypt" };
+	w:AddCity(0, 1, "Moscow");
+	w:AddCity(0, 2, "Novgorod");
+	w:AddCity(1, 7, "Delhi");
+	w:AddCity(2, 9, "Thebes");
+	w:AddRoute(0, 1, 1, 7, { [2] = 4, [3] = 1.5 }, { [2] = 2 });
+	w:AddRoute(1, 7, 0, 2, { [0] = 1, [1] = 1 }, {});
+	w:AddRoute(0, 2, 2, 9, { [2] = 9 }, { [2] = 9 });
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+
+	eq(#TabDeals(w, panel), 1, "deals stay apart from routes");
+	check(not panel.RoutesRule.hidden, "rule between deals and routes");
+	check(not panel.RoutesHeader.hidden, "routes heading");
+	check(panel.RoutesEmpty.hidden, "no-routes line shown with routes");
+	local routes = TabDeals(w, panel, panel.TabRoutes);
+	eq(#routes, 2, "only routes with this leader");
+	eq(routes[1].header, "Moscow → Delhi · your route", "our route first");
+	eq(routes[1].sides[1].title, "Moscow", "origin city");
+	eq(table.concat(routes[1].sides[1].items, "|"), "+4 [ICON_Gold]  +1.5 [ICON_Science]", "origin yield");
+	eq(routes[1].sides[2].title, "Delhi", "destination city");
+	eq(table.concat(routes[1].sides[2].items, "|"), "+2 [ICON_Gold]", "destination yield");
+	eq(routes[2].header, "Delhi → Novgorod · route of Gandhi", "their route");
+	eq(table.concat(routes[2].sides[1].items, "|"), "+1 [ICON_Food]  +1 [ICON_Production]", "their origin yield");
+	eq(table.concat(routes[2].sides[2].items, "|"), "No yield", "our city earns nothing");
+end);
+
+test("deals tab says when there are no trade routes", function(w)
+	w:AddCity(0, 1, "Moscow");
+	w:Load();
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	eq(#TabDeals(w, panel, panel.TabRoutes), 0, "route count");
+	check(not panel.RoutesEmpty.hidden, "no-routes line hidden");
+	check(not panel.TabEmpty.hidden, "no-deals line hidden");
 end);
 
 test("deals tab lists a one-time gold gift", function(w)

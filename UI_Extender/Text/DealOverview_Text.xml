@@ -50,7 +50,22 @@
       <Text>Intel Report: Deals</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_TAB_TOOLTIP">
-      <Text>Active deals with this leader.</Text>
+      <Text>Active deals and trade routes with this leader.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_TITLE">
+      <Text>[ICON_TradeRoute] Trade routes</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_EMPTY">
+      <Text>No active trade routes.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_OURS">
+      <Text>{1_From} → {2_To} · your route</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_THEIRS">
+      <Text>{1_From} → {2_To} · route of {3_Leader}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_NO_YIELD">
+      <Text>No yield</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_COLLAPSE">
       <Text>Hide</Text>
@@ -193,7 +208,22 @@
       <Text>Доклад разведки: сделки</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_TAB_TOOLTIP" Language="ru_RU">
-      <Text>Действующие сделки с этим лидером.</Text>
+      <Text>Действующие сделки и торговые пути с этим лидером.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_TITLE" Language="ru_RU">
+      <Text>[ICON_TradeRoute] Торговые пути</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_EMPTY" Language="ru_RU">
+      <Text>Нет активных торговых путей.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_OURS" Language="ru_RU">
+      <Text>{1_From} → {2_To} · ваш путь</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_THEIRS" Language="ru_RU">
+      <Text>{1_From} → {2_To} · путь: {3_Leader}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_ROUTES_NO_YIELD" Language="ru_RU">
+      <Text>Без дохода</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_COLLAPSE" Language="ru_RU">
       <Text>Свернуть</Text>

@@ -1432,18 +1432,15 @@ local function AddTabSide(deal, titleID, title, lines)
 	return { side = side, label = label, title = title };
 end
 
-local function AddTabDeal(card, leader)
-	local deal = m_TabDealIM:GetInstance(m_Tab.panel.TabCards);
-	local header, showTurns = CardTiming(card);
+-- One entry of the tab, a deal or a trade route. sides: { { titleID, title, lines }, ... }
+local function AddTabEntry(parent, header, sides)
+	local deal = m_TabDealIM:GetInstance(parent);
 	deal.Header:SetText(header);
 	local locked = {};
-	local function add(titleID, title, lines)
-		local entry = AddTabSide(deal, titleID, title, lines);
+	for _, s in ipairs(sides) do
+		local entry = AddTabSide(deal, s[1], s[2], s[3]);
 		if entry ~= nil then table.insert(locked, entry) end
 	end
-	add("SharedTitle", Lookup("LOC_UIEXT_DEALS_SHARED"), LineTexts(card.shared, showTurns));
-	add("OursTitle", Lookup("LOC_UIEXT_DEALS_WE_GIVE"), LineTexts(card.ours, showTurns));
-	add("TheirsTitle", Format("LOC_UIEXT_DEALS_THEY_GIVE", leader), LineTexts(card.theirs, showTurns));
 	deal.Sides:CalculateSize();
 	deal.Top:CalculateSize();
 	-- Measuring the parent can grow a side around a wrapped title. Lock the bullets back to the top.
@@ -1452,9 +1449,107 @@ local function AddTabDeal(card, leader)
 	end
 end
 
+local function AddTabDeal(card, leader)
+	local header, showTurns = CardTiming(card);
+	AddTabEntry(m_Tab.panel.TabCards, header, {
+		{ "SharedTitle", Lookup("LOC_UIEXT_DEALS_SHARED"), LineTexts(card.shared, showTurns) },
+		{ "OursTitle", Lookup("LOC_UIEXT_DEALS_WE_GIVE"), LineTexts(card.ours, showTurns) },
+		{ "TheirsTitle", Format("LOC_UIEXT_DEALS_THEY_GIVE", leader), LineTexts(card.theirs, showTurns) },
+	});
+end
+
+-- ---------------------------------------------------------------------------
+-- Trade routes between the local player and the leader of the report, both ways.
+-- A route names its cities, its trader and what each city earns. How many turns
+-- it has left the game does not tell.
+-- ---------------------------------------------------------------------------
+local function PlayerCities(playerID)
+	local player = Players ~= nil and Players[playerID] or nil;
+	if player == nil then return nil end
+	return Call(player, "GetCities");
+end
+
+local function RouteCityName(playerID, cityID)
+	local cities = PlayerCities(playerID);
+	if cities ~= nil and cities.FindID ~= nil then
+		local ok, city = pcall(cities.FindID, cities, cityID);
+		if ok and city ~= nil then return Lookup(Call(city, "GetName")) end
+	end
+	return Lookup("LOC_UIEXT_DEALS_CITY_UNNAMED");
+end
+
+local function AmountText(amount)
+	local rounded = math.floor(amount * 10 + 0.5) / 10;
+	if rounded == math.floor(rounded) then return string.format("%d", rounded) end
+	return string.format("%.1f", rounded);
+end
+
+local function RouteYieldsText(yields)
+	local parts = {};
+	for _, y in ipairs(type(yields) == "table" and yields or {}) do
+		local amount = tonumber(y.Amount) or 0;
+		local info = GameInfo ~= nil and GameInfo.Yields ~= nil and GameInfo.Yields[y.YieldIndex] or nil;
+		if amount ~= 0 and info ~= nil then
+			table.insert(parts, (amount > 0 and "+" or "") .. AmountText(amount) .. " " .. (info.IconString or Lookup(info.Name)));
+		end
+	end
+	if #parts == 0 then return Lookup("LOC_UIEXT_ROUTES_NO_YIELD") end
+	return table.concat(parts, "  ");
+end
+
+local function CollectRoutes(fromID, toID, list)
+	local cities = PlayerCities(fromID);
+	if cities == nil or cities.Members == nil then return end
+	local ok, iter, state, first = pcall(cities.Members, cities);
+	if not ok or iter == nil then return end
+	for _, city in iter, state, first do
+		local trade = Call(city, "GetTrade");
+		local routes = trade ~= nil and Call(trade, "GetOutgoingRoutes") or nil;
+		for _, route in ipairs(type(routes) == "table" and routes or {}) do
+			if route.DestinationCityPlayer == toID then
+				table.insert(list, {
+					ours = fromID == LocalPlayerID(),
+					origin = RouteCityName(fromID, route.OriginCityID),
+					destination = RouteCityName(toID, route.DestinationCityID),
+					originYields = RouteYieldsText(route.OriginYields),
+					destinationYields = RouteYieldsText(route.DestinationYields),
+				});
+			end
+		end
+	end
+end
+
+-- Our routes first, then theirs; each group by city names.
+local function GatherRoutes(localID, otherID)
+	local list = {};
+	CollectRoutes(localID, otherID, list);
+	CollectRoutes(otherID, localID, list);
+	table.sort(list, function(a, b)
+		if a.ours ~= b.ours then return a.ours end
+		if a.origin ~= b.origin then return a.origin < b.origin end
+		return a.destination < b.destination;
+	end);
+	return list;
+end
+
+local function AddTabRoute(route, leader)
+	local header;
+	if route.ours then
+		header = Format("LOC_UIEXT_ROUTES_OURS", route.origin, route.destination);
+	else
+		header = Format("LOC_UIEXT_ROUTES_THEIRS", route.origin, route.destination, leader);
+	end
+	AddTabEntry(m_Tab.panel.TabRoutes, header, {
+		{ route.ours and "OursTitle" or "TheirsTitle", route.origin, { route.originYields } },
+		{ route.ours and "TheirsTitle" or "OursTitle", route.destination, { route.destinationYields } },
+	});
+end
+
 local function RefreshDealsTab()
 	if m_Tab == nil or m_Tab.playerID < 0 then return end
-	local cards = GatherDeals(LocalPlayerID(), m_Tab.playerID);
+	local localID = LocalPlayerID();
+	local cards = GatherDeals(localID, m_Tab.playerID);
+	local routes = GatherRoutes(localID, m_Tab.playerID);
 	local leader = LeaderName(m_Tab.playerID);
 	m_TabItemIM:ResetInstances();
 	m_TabSideIM:ResetInstances();
@@ -1462,11 +1557,16 @@ local function RefreshDealsTab()
 	for _, card in ipairs(cards) do
 		AddTabDeal(card, leader);
 	end
+	for _, route in ipairs(routes) do
+		AddTabRoute(route, leader);
+	end
 	local panel = m_Tab.panel;
 	panel.TabCards:CalculateSize();
+	panel.TabRoutes:CalculateSize();
 	panel.TabEmpty:SetHide(#cards > 0);
-	local height = #cards > 0 and panel.TabCards:GetSizeY() or panel.TabEmpty:GetSizeY();
-	panel.Top:SetSizeVal(TAB_WIDTH, height + 8);
+	panel.RoutesEmpty:SetHide(#routes > 0);
+	panel.TabBody:CalculateSize();
+	panel.Top:SetSizeVal(TAB_WIDTH, panel.TabBody:GetSizeY() + 8);
 	Relayout(panel.Top);
 end
 

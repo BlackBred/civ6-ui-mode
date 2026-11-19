@@ -100,14 +100,27 @@
 		</Button>
 	</Instance>
 
-	<!-- Deals tab body. Columns follow the overview rows: icon at 20, label at 60, bullet at 220, value at 250. -->
+	<!-- Deals tab body. Columns follow the overview rows: icon at 20, label at 60, bullet at 220, value at 250.
+	     Trade routes go under the deals, past a rule; each route is laid out like a deal. -->
 	<Instance Name="DealsTabPanel">
 		<Container ID="Top" Size="470,40">
-			<Stack ID="TabCards" Anchor="L,T" Offset="0,0" StackGrowth="Down" StackPadding="0"/>
-			<Container ID="TabEmpty" Size="470,38" Hidden="1">
-				<Image Offset="20,10" Size="22,22" IconSize="22" Icon="ICON_UNIT_TRADER_WHITE"/>
-				<Label Offset="60,10" Style="FontNormal16" String="LOC_UIEXT_DEALS_EMPTY"/>
-			</Container>
+			<Stack ID="TabBody" Anchor="L,T" Offset="0,0" StackGrowth="Down" StackPadding="0">
+				<Stack ID="TabCards" Anchor="L,T" StackGrowth="Down" StackPadding="0"/>
+				<Container ID="TabEmpty" Size="470,38" Hidden="1">
+					<Image Offset="20,10" Size="22,22" IconSize="22" Icon="ICON_UNIT_TRADER_WHITE"/>
+					<Label Offset="60,10" Style="FontNormal16" String="LOC_UIEXT_DEALS_EMPTY"/>
+				</Container>
+				<Container ID="RoutesRule" Size="470,16">
+					<Box Anchor="C,C" Size="450,2" Color="196,168,92,200"/>
+				</Container>
+				<Container ID="RoutesHeader" Size="470,30">
+					<Label Offset="20,6" Style="FontNormal16" Color0="236,220,176,255" Color1="0,0,0,200" String="LOC_UIEXT_ROUTES_TITLE"/>
+				</Container>
+				<Stack ID="TabRoutes" Anchor="L,T" StackGrowth="Down" StackPadding="0"/>
+				<Container ID="RoutesEmpty" Size="470,30" Hidden="1">
+					<Label Offset="60,4" Style="FontNormal16" String="LOC_UIEXT_ROUTES_EMPTY"/>
+				</Container>
+			</Stack>
 		</Container>
 	</Instance>
 

@@ -204,6 +204,13 @@ function M.new(opts)
 	w.requests = {};
 	w.notifications = {};
 	w.sounds = {};
+	w.cities = {};
+	w.yields = {
+		[0] = { YieldType = "YIELD_FOOD", IconString = "[ICON_Food]" },
+		[1] = { YieldType = "YIELD_PRODUCTION", IconString = "[ICON_Production]" },
+		[2] = { YieldType = "YIELD_GOLD", IconString = "[ICON_Gold]" },
+		[3] = { YieldType = "YIELD_SCIENCE", IconString = "[ICON_Science]" },
+	};
 
 	local contextSpecs, instanceSpecs = M.ParseContext(ReadFile(w.modDir .. "/UI/DealOverview.xml"));
 	w.instanceSpecs = instanceSpecs;
@@ -265,6 +272,31 @@ function World:AddResource(index, resourceType, name, className)
 		ResourceClassType = className or "RESOURCECLASS_LUXURY",
 	};
 	self.gameText["LOC_" .. resourceType .. "_NAME"] = name;
+end
+
+function World:AddCity(playerID, cityID, name)
+	self.cities[playerID] = self.cities[playerID] or {};
+	table.insert(self.cities[playerID], { id = cityID, name = name, routes = {} });
+end
+
+-- As City:GetTrade():GetOutgoingRoutes() reports it. Yields: { [yieldIndex] = amount }.
+function World:AddRoute(fromPlayer, fromCity, toPlayer, toCity, originYields, destinationYields)
+	local function list(yields)
+		local out = {};
+		for index, amount in pairs(yields or {}) do table.insert(out, { YieldIndex = index, Amount = amount }) end
+		table.sort(out, function(a, b) return a.YieldIndex < b.YieldIndex end);
+		return out;
+	end
+	for _, city in ipairs(self.cities[fromPlayer] or {}) do
+		if city.id == fromCity then
+			table.insert(city.routes, {
+				OriginCityPlayer = fromPlayer, OriginCityID = fromCity,
+				DestinationCityPlayer = toPlayer, DestinationCityID = toCity,
+				TraderUnitPlayer = fromPlayer, TraderUnitID = 100 + #city.routes,
+				OriginYields = list(originYields), DestinationYields = list(destinationYields),
+			});
+		end
+	end
 end
 
 -- items: { type = "GOLD", from = 0, amount = 5, duration = 30, enacted = 10, subType = "ALLIANCE", valueType = 1, name = "LOC_..." }
@@ -418,6 +450,34 @@ function World:Environment(gameplay)
 			GetDiplomacy = function()
 				return { IsAtWarWith = function(_, other) return wallet().war[other] == true end };
 			end,
+			GetCities = function()
+				local function city(spec)
+					return {
+						GetID = function() return spec.id end,
+						GetName = function() return spec.name end,
+						GetTrade = function()
+							return { GetOutgoingRoutes = function() return spec.routes end };
+						end,
+					};
+				end
+				local specs = w.cities[id] or {};
+				return {
+					Members = function()
+						local i = 0;
+						return function()
+							i = i + 1;
+							if specs[i] == nil then return nil end
+							return i, city(specs[i]);
+						end;
+					end,
+					FindID = function(_, cityID)
+						for _, spec in ipairs(specs) do
+							if spec.id == cityID then return city(spec) end
+						end
+						return nil;
+					end,
+				};
+			end,
 		};
 	end
 
@@ -565,7 +625,7 @@ function World:Environment(gameplay)
 		GameEvents = w.GameEvents,
 		DealItemTypes = DEAL_ITEM_TYPES,
 		DealAgreementTypes = AGREEMENT_TYPES,
-		GameInfo = { Resources = w.resources, DiplomaticActions = w.actions, GreatWorks = w.greatWorks },
+		GameInfo = { Resources = w.resources, DiplomaticActions = w.actions, GreatWorks = w.greatWorks, Yields = w.yields },
 	};
 end
 
