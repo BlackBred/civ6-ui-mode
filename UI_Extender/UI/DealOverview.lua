@@ -16,6 +16,7 @@ local SCROLL_TOP = 80;
 local CARD_PADDING = 10;
 local ROW_HEIGHT = 22;
 local CHAR_WIDTH = 9;
+local DEAL_STACK_PADDING = 8;
 
 local m_DealIM = nil;
 local m_FlowBlockIM = nil;
@@ -37,6 +38,10 @@ local m_FlowMissLogged = false;
 local m_Snaps = {};
 local m_Watch = nil;
 local m_KeyFloor = 0;
+-- The finished deal a notification asked for: { id, turn }. Highlighted in the history,
+-- which is scrolled to it once.
+local m_Focus = nil;
+local m_FocusScrolled = false;
 
 -- ---------------------------------------------------------------------------
 -- Diagnostics: Lua.log (needs EnableTuner 1 in AppOptions.txt) plus an on-screen error line.
@@ -131,53 +136,8 @@ local function RemainingTurns(item, duration)
 	return nil;
 end
 
-local function Shown(name)
-	if name == nil or name == "" then return "" end
-	return Lookup(name);
-end
-
-local function ItemLabel(stored)
-	local kind = stored.kind;
-	local amount = stored.amount or 0;
-	if kind == "GOLD" then
-		if (stored.duration or 0) > 0 then
-			return Format("LOC_UIEXT_DEALS_GOLD_PER_TURN", amount);
-		end
-		return Format("LOC_UIEXT_DEALS_GOLD_LUMP", amount);
-	elseif kind == "FAVOR" then
-		return Format("LOC_UIEXT_DEALS_FAVOR", amount);
-	elseif kind == "RESOURCES" then
-		local resource = GameInfo ~= nil and GameInfo.Resources ~= nil and GameInfo.Resources[stored.valueType] or nil;
-		if resource ~= nil then
-			return tostring(amount) .. " [ICON_" .. resource.ResourceType .. "] " .. Lookup(resource.Name);
-		end
-		local name = Shown(stored.name);
-		if name ~= "" then return tostring(amount) .. " " .. name end
-		return tostring(amount);
-	elseif kind == "AGREEMENTS" then
-		if stored.name ~= nil and stored.name ~= "" then return Lookup(stored.name) end
-		local info = GameInfo ~= nil and GameInfo.DiplomaticActions ~= nil and GameInfo.DiplomaticActions[stored.subType] or nil;
-		if info ~= nil then return Lookup(info.Name) end
-		return "";
-	elseif kind == "CITIES" then
-		local name = Shown(stored.name);
-		if name == "" then return Lookup("LOC_UIEXT_DEALS_CITY_UNNAMED") end
-		return Format("LOC_UIEXT_DEALS_CITY", name);
-	elseif kind == "GREATWORK" then
-		local name = "";
-		if GameInfo ~= nil and GameInfo.GreatWorks ~= nil then
-			local info = GameInfo.GreatWorks[stored.valueType];
-			if info ~= nil then name = Lookup(info.Name) end
-		end
-		if name == "" then name = Shown(stored.name) end
-		if name == "" then return Lookup("LOC_UIEXT_DEALS_GREAT_WORK") end
-		return Format("LOC_UIEXT_DEALS_GREAT_WORK_NAMED", name);
-	end
-	return Shown(stored.name);
-end
-
 local function EntryFor(stored, item)
-	local text = ItemLabel(stored);
+	local text = DealRecord.ItemLabel(stored);
 	if text == "" or stored.from == nil then return nil end
 	local instant = DealRecord.IsInstant(stored);
 	local remaining = nil;
@@ -412,18 +372,8 @@ end
 local function HistoryCard(deal, localID, archive)
 	local card = { ours = {}, theirs = {}, shared = {}, localID = localID };
 	local ended = DealRecord.EndedTurn(deal);
-	card.history = { start = deal.turn, ended = ended, oneTime = DealRecord.IsOneTime(deal) };
-	local items, lasting = {}, {};
-	for _, stored in ipairs(deal.items) do
-		table.insert(items, stored);
-		if not DealRecord.IsInstant(stored) then table.insert(lasting, stored) end
-	end
-	local accepted = #lasting > 0 and DealRecord.AcceptedFor(archive, deal.a, deal.b, deal.turn, lasting) or nil;
-	if accepted ~= nil then
-		for _, stored in ipairs(accepted.items) do
-			if DealRecord.IsInstant(stored) then table.insert(items, stored) end
-		end
-	end
+	local items = DealRecord.FullItems(archive, deal);
+	card.history = { start = deal.turn, ended = ended, oneTime = DealRecord.IsOneTime(deal), record = deal, items = items };
 	local seen, seenShared = {}, {};
 	for _, stored in ipairs(items) do
 		local entry = EntryFor(stored, nil);
@@ -869,6 +819,244 @@ local function CardTiming(card)
 end
 
 -- ---------------------------------------------------------------------------
+-- A finished deal put back on the table. The deal screen takes the outgoing working
+-- deal as it finds it whenever it is shown, so the items go there and the screen is
+-- shown again. Every item is checked first: with one of them no longer possible, or
+-- not affordable now, the table stays as it was.
+-- ---------------------------------------------------------------------------
+local OPTION_AGREEMENTS = { "JOINT_WAR", "THIRD_PARTY_WAR", "RESEARCH_AGREEMENT", "ALLIANCE" };
+
+local function Possible(fromID, toID, itemType, deal, subType)
+	if DealManager == nil or DealManager.GetPossibleDealItems == nil then return {} end
+	local ok, list;
+	if subType ~= nil then
+		ok, list = pcall(DealManager.GetPossibleDealItems, fromID, toID, itemType, subType, deal);
+	else
+		ok, list = pcall(DealManager.GetPossibleDealItems, fromID, toID, itemType, deal);
+	end
+	if ok and type(list) == "table" then return list end
+	return {};
+end
+
+-- As on the deal screen: an item that only waits for its counterpart can still be offered.
+local function Usable(entry)
+	if entry.IsValid ~= false then return true end
+	return DealValidationResult ~= nil and entry.ValidationResult == DealValidationResult.MISSING_DEPENDENCY;
+end
+
+local function NeedsOption(subType)
+	if DealAgreementTypes == nil then return false end
+	for _, name in ipairs(OPTION_AGREEMENTS) do
+		if DealAgreementTypes[name] ~= nil and DealAgreementTypes[name] == subType then return true end
+	end
+	return false;
+end
+
+-- The game's offer of this item right now, or nil.
+local function OfferFor(stored, fromID, toID, deal)
+	local itemType = DealRecord.TypeOf(stored.kind);
+	if itemType == nil then return nil end
+	if stored.kind == "AGREEMENTS" then
+		local found = nil;
+		for _, entry in ipairs(Possible(fromID, toID, itemType, deal)) do
+			if found == nil and entry.SubType == stored.subType and Usable(entry) then found = entry end
+		end
+		if found == nil or not NeedsOption(stored.subType) then return found end
+		for _, entry in ipairs(Possible(fromID, toID, itemType, deal, stored.subType)) do
+			if entry.ForType == stored.valueType then return entry end
+		end
+		return nil;
+	end
+	for _, entry in ipairs(Possible(fromID, toID, itemType, deal)) do
+		if entry.ForType == stored.valueType and Usable(entry) then return entry end
+	end
+	return nil;
+end
+
+-- A resource with no term is handed over together with its city, not on its own.
+local function RidesWithCity(stored)
+	return stored.kind == "RESOURCES" and DealRecord.IsInstant(stored);
+end
+
+local function Holds(stored, toID, deal)
+	local player = Players ~= nil and Players[stored.from] or nil;
+	if player == nil then return false end
+	local kind = stored.kind;
+	if kind == "GOLD" then
+		-- The per-turn limit is only known to the item itself, so it is checked when added.
+		if not DealRecord.IsInstant(stored) then return true end
+		local treasury = Call(player, "GetTreasury");
+		local balance = treasury ~= nil and Call(treasury, "GetGoldBalance") or nil;
+		return type(balance) == "number" and math.floor(balance) >= (stored.amount or 0);
+	elseif kind == "FAVOR" then
+		local favor = Call(player, "GetFavor");
+		return type(favor) == "number" and favor >= (stored.amount or 0);
+	elseif kind == "RESOURCES" then
+		if RidesWithCity(stored) then return true end
+		local resources = Call(player, "GetResources");
+		if resources == nil or resources.GetResourceAmount == nil then return false end
+		local ok, have = pcall(resources.GetResourceAmount, resources, stored.valueType);
+		return ok and type(have) == "number" and have >= (stored.amount or 0);
+	elseif kind == "AGREEMENTS" or kind == "GREATWORK" or kind == "CITIES" or kind == "CAPTIVE" then
+		return OfferFor(stored, stored.from, toID, deal) ~= nil;
+	end
+	return false;
+end
+
+local function Set(item, method, ...)
+	local fn = item[method];
+	if fn == nil then return false end
+	return (pcall(fn, item, ...));
+end
+
+local function HasAgreement(deal, subType)
+	local agreements = DealItemTypes ~= nil and DealItemTypes.AGREEMENTS or nil;
+	local ok, iter, state, first = pcall(deal.Items, deal);
+	if not ok or iter == nil then return false end
+	for item in iter, state, first do
+		if Call(item, "GetType") == agreements and Call(item, "GetSubType") == subType then return true end
+	end
+	return false;
+end
+
+local function Put(deal, stored, toID)
+	local kind = stored.kind;
+	local itemType = DealRecord.TypeOf(kind);
+	if itemType == nil then return false end
+	if RidesWithCity(stored) then return true end
+	local entry = nil;
+	if kind == "AGREEMENTS" then
+		-- Both sides of a shared agreement are stored; the game adds the second one itself.
+		if stored.mutual and HasAgreement(deal, stored.subType) then return true end
+		entry = OfferFor(stored, stored.from, toID, deal);
+		if entry == nil then return false end
+	end
+	local ok, item;
+	if kind == "CITIES" then
+		ok, item = pcall(deal.AddItemOfType, deal, itemType, stored.from, toID, stored.subType, stored.valueType);
+	else
+		ok, item = pcall(deal.AddItemOfType, deal, itemType, stored.from);
+	end
+	if not ok or item == nil then return false end
+	if kind == "GOLD" or kind == "FAVOR" then
+		-- The duration first: the limit for gold per turn differs from a lump sum.
+		Set(item, "SetDuration", stored.duration or 0);
+		local max = Call(item, "GetMaxAmount");
+		if type(max) ~= "number" or max < (stored.amount or 0) then return false end
+		Set(item, "SetAmount", stored.amount);
+		return true;
+	elseif kind == "RESOURCES" then
+		Set(item, "SetValueType", stored.valueType);
+		Set(item, "SetAmount", stored.amount);
+		Set(item, "SetDuration", stored.duration);
+	elseif kind == "AGREEMENTS" then
+		Set(item, "SetSubType", stored.subType);
+		Set(item, "SetDuration", stored.duration or 0);
+		if NeedsOption(stored.subType) then
+			Set(item, "SetValueType", entry.ForType);
+			if type(entry.Parameters) == "table" and entry.Parameters.WarType ~= nil then
+				Set(item, "SetParameterValue", "WarType", entry.Parameters.WarType);
+			end
+		end
+	elseif kind == "GREATWORK" or kind == "CITIES" then
+		Set(item, "SetSubType", stored.subType);
+		Set(item, "SetValueType", stored.valueType);
+	elseif kind == "CAPTIVE" then
+		Set(item, "SetValueType", stored.valueType);
+	end
+	if item.IsValid == nil then return true end
+	local valid, result = pcall(item.IsValid, item, deal);
+	return valid and result ~= false;
+end
+
+-- nil when a locked item is on the table: such an item cannot be put back as it was.
+local function ItemsOnTable(deal)
+	local list = {};
+	local ok, iter, state, first = pcall(deal.Items, deal);
+	if not ok or iter == nil then return list end
+	for item in iter, state, first do
+		if Call(item, "IsLocked") == true then return nil end
+		local stored = DealRecord.FromItem(item);
+		if stored ~= nil then table.insert(list, stored) end
+	end
+	return list;
+end
+
+local function FillTable(localID, otherID, items)
+	pcall(DealManager.ClearWorkingDeal, DealDirection.OUTGOING, localID, otherID);
+	local deal = DealManager.GetWorkingDeal(DealDirection.OUTGOING, localID, otherID);
+	if deal == nil then return false end
+	for _, stored in ipairs(items) do
+		local toID = stored.from == localID and otherID or localID;
+		if not Put(deal, stored, toID) then return false end
+	end
+	if deal.Validate ~= nil then pcall(deal.Validate, deal) end
+	return true;
+end
+
+-- When the other side opened the session, showing the screen again copies their proposal over ours.
+local function SessionIsOurs(localID, otherID)
+	if DiplomacyManager == nil or DiplomacyManager.FindOpenSessionID == nil or DiplomacyManager.GetSessionInfo == nil then return true end
+	local ok, sessionID = pcall(DiplomacyManager.FindOpenSessionID, localID, otherID);
+	if not ok or sessionID == nil or sessionID < 0 then return true end
+	local got, info = pcall(DiplomacyManager.GetSessionInfo, sessionID);
+	if not got or type(info) ~= "table" or info.FromPlayer == nil then return true end
+	return info.FromPlayer ~= otherID;
+end
+
+local function ShowDealScreenAgain()
+	local view = ContextPtr:LookUpControl("/InGame/DiplomacyDealView");
+	if view == nil or view.SetHide == nil then return end
+	pcall(view.SetHide, view, true);
+	pcall(view.SetHide, view, false);
+end
+
+-- Returns why the table was left alone, or nil once the deal is on it.
+local function ProposeAgain(items)
+	if not (HasOtherPlayer() and DealViewOpen()) then return "no deal screen" end
+	if DealManager == nil or DealManager.GetWorkingDeal == nil or DealManager.ClearWorkingDeal == nil or DealDirection == nil then
+		return "no deal API";
+	end
+	local localID, otherID = LocalPlayerID(), m_OtherPlayerID;
+	if items == nil or #items == 0 then return "empty" end
+	for _, stored in ipairs(items) do
+		if stored.from ~= localID and stored.from ~= otherID then return "another player's item" end
+	end
+	if DealManager.HasPendingDeal ~= nil then
+		local ok, pending = pcall(DealManager.HasPendingDeal, localID, otherID);
+		if ok and pending then return "a deal is pending" end
+	end
+	if not SessionIsOurs(localID, otherID) then return "their proposal is open" end
+	local deal = DealManager.GetWorkingDeal(DealDirection.OUTGOING, localID, otherID);
+	if deal == nil then return "no working deal" end
+	local before = ItemsOnTable(deal);
+	if before == nil then return "a locked item is on the table" end
+	local sharedSeen = {};
+	for _, stored in ipairs(items) do
+		local toID = stored.from == localID and otherID or localID;
+		local repeatShared = stored.mutual and sharedSeen[stored.subType];
+		if stored.mutual then sharedSeen[stored.subType] = true end
+		if not repeatShared and not Holds(stored, toID, deal) then
+			return "not available " .. DealRecord.ItemsBrief({ stored });
+		end
+	end
+	if not FillTable(localID, otherID, items) then
+		FillTable(localID, otherID, before);
+		return "the game refused an item";
+	end
+	ShowDealScreenAgain();
+	if UI ~= nil and UI.PlaySound ~= nil then pcall(UI.PlaySound, "UI_GreatWorks_Put_Down") end
+	return nil;
+end
+
+local function OnPickHistory(history)
+	Try("repeat", function()
+		local why = ProposeAgain(history.items);
+		Log("repeat deal " .. tostring(history.record.id) .. " -> " .. (why or "on the table"));
+	end);
+end
+
+-- ---------------------------------------------------------------------------
 -- Card layout
 -- ---------------------------------------------------------------------------
 -- plainOnce: the one-time column already says "one-time", so no suffix is added.
@@ -1018,6 +1206,29 @@ local function PopulateCard(inst, card, leaderName)
 	inst.Top:SetSizeVal(m_CardWidth, height);
 	inst.Background:SetSizeVal(m_CardWidth, height);
 	inst.TopRule:SetSizeVal(m_CardWidth, 1);
+	inst.Focus:SetSizeVal(m_CardWidth, height);
+	inst.Focus:SetHide(not card.focused);
+
+	-- A finished deal can be put back on the table with one click.
+	local history = card.history;
+	inst.Pick:SetHide(history == nil);
+	if history ~= nil then
+		inst.Pick:SetSizeVal(m_CardWidth, height);
+		inst.Pick:SetToolTipString(Lookup("LOC_UIEXT_HISTORY_REPEAT_TIP"));
+		inst.Pick:RegisterCallback(Mouse.eLClick, function() OnPickHistory(history) end);
+	end
+end
+
+-- The history card a notification asked for: the same deal, or else one that started on that turn.
+local function FocusIndex(cards)
+	if m_Focus == nil then return nil end
+	for i, card in ipairs(cards) do
+		if card.history ~= nil and m_Focus.id ~= nil and card.history.record.id == m_Focus.id then return i end
+	end
+	for i, card in ipairs(cards) do
+		if card.history ~= nil and m_Focus.turn ~= nil and card.history.record.turn == m_Focus.turn then return i end
+	end
+	return nil;
 end
 
 -- ---------------------------------------------------------------------------
@@ -1349,10 +1560,16 @@ local function RefreshUnsafe()
 
 	m_DealIM:ResetInstances();
 	local leader = LeaderName(otherID);
+	local focusIndex = m_ShowHistory and FocusIndex(cards) or nil;
+	local focusY, cardY = 0, 0;
 	for i, card in ipairs(cards) do
 		Log(string.format("  card %d: ours=%d theirs=%d shared=%d soonest=%s",
 			i, #card.ours, #card.theirs, #card.shared, tostring(card.soonest)));
-		PopulateCard(m_DealIM:GetInstance(), card, leader);
+		card.focused = i == focusIndex;
+		if card.focused then focusY = cardY end
+		local inst = m_DealIM:GetInstance();
+		PopulateCard(inst, card, leader);
+		cardY = cardY + inst.Top:GetSizeY() + DEAL_STACK_PADDING;
 	end
 	Controls.DealStack:CalculateSize();
 	Controls.DealStack:ReprocessAnchoring();
@@ -1372,6 +1589,12 @@ local function RefreshUnsafe()
 	Controls.DealStack:SetSizeX(m_CardWidth);
 	Controls.Root:ReprocessAnchoring();
 	pcall(function() Controls.Scroll:CalculateInternalSize() end);
+	if focusIndex ~= nil and not m_FocusScrolled then
+		m_FocusScrolled = true;
+		local range = Controls.DealStack:GetSizeY() - scrollH;
+		local value = range > 0 and math.max(0, math.min(1, focusY / range)) or 0;
+		pcall(function() Controls.Scroll:SetScrollValue(value) end);
+	end
 
 	Controls.ExpandButton:SetOffsetVal(left + 10, screenH - SCREEN_MARGIN - FOOTER_HEIGHT + 7);
 
@@ -1388,6 +1611,8 @@ local function Hide()
 	Controls.ExpandButton:SetHide(true);
 	UpdateResourceFlows();
 	m_Tab = nil;
+	m_Focus = nil;
+	m_FocusScrolled = false;
 end
 
 -- ---------------------------------------------------------------------------
@@ -1545,6 +1770,54 @@ local function SelectTab(history)
 	if m_Open then Refresh() end
 end
 
+-- The deal screen with this leader, on the history tab, at the finished deal.
+-- At war there is no deal screen, so the diplomacy screen opens instead.
+local function OpenHistoryOf(partnerID, focus)
+	local localID = LocalPlayerID();
+	if localID < 0 or partnerID == nil or partnerID < 0 or partnerID == localID then return end
+	m_OtherPlayerID = partnerID;
+	m_Focus = focus;
+	m_FocusScrolled = false;
+	m_ShowHistory = true;
+	ShowTabSelection();
+	local atWar = false;
+	pcall(function() atWar = Players[localID]:GetDiplomacy():IsAtWarWith(partnerID) == true end);
+	if atWar or DiplomacyManager == nil or DiplomacyManager.RequestSession == nil then
+		LuaEvents.DiplomacyRibbon_OpenDiplomacyActionView(partnerID);
+		Log("notification opens diplomacy player=" .. tostring(partnerID) .. (atWar and " at war" or ""));
+		return;
+	end
+	-- As the game's own "make a deal": start from an empty table unless a deal is pending.
+	if DealManager ~= nil and DealManager.ClearWorkingDeal ~= nil and DealDirection ~= nil then
+		local ok, pending = pcall(DealManager.HasPendingDeal, localID, partnerID);
+		if not (ok and pending) then
+			pcall(DealManager.ClearWorkingDeal, DealDirection.OUTGOING, localID, partnerID);
+		end
+	end
+	pcall(DiplomacyManager.RequestSession, localID, partnerID, "MAKE_DEAL");
+	Log("notification opens deal history player=" .. tostring(partnerID) .. " deal=" .. tostring(focus and focus.id));
+end
+
+local function NotificationValue(notification, key)
+	if notification == nil or notification.GetValue == nil then return nil end
+	local ok, value = pcall(notification.GetValue, notification, key);
+	if ok then return value end
+	return nil;
+end
+
+local function OnUserNotification(playerID, notificationID)
+	Try("notification", function()
+		if playerID ~= LocalPlayerID() or NotificationManager == nil or NotificationManager.Find == nil then return end
+		local ok, notification = pcall(NotificationManager.Find, playerID, notificationID);
+		if not ok or notification == nil then return end
+		if NotificationValue(notification, DealRecord.NOTIFY_MARK) == nil then return end
+		OpenHistoryOf(tonumber(NotificationValue(notification, "UIExtPartner")), {
+			id = tonumber(NotificationValue(notification, "UIExtDealID")),
+			turn = tonumber(NotificationValue(notification, "UIExtTurn")),
+		});
+	end);
+end
+
 local function OnPlayerChosen(playerID)
 	if playerID ~= nil and playerID >= 0 then
 		m_OtherPlayerID = playerID;
@@ -1685,6 +1958,7 @@ local function Initialize()
 	LuaEvents.DiploPopup_HideDeal.Add(OnDealsChanged);
 	Events.DiplomacyDealEnacted.Add(OnDealEnacted);
 	LuaEvents.DiploScene_RefreshTabs.Add(OnRefreshTabs);
+	LuaEvents.NotificationPanel_UserNotificationActivate.Add(OnUserNotification);
 	Log("initialized");
 end
 

@@ -2,7 +2,7 @@
 <Mod id="f3a8c2e1-7b44-4d19-8e6a-2c91b5d04f77" version="1">
   <Properties>
     <Name>UI Extender</Name>
-    <Description>В докладе разведки показывает действующие сделки с этим лидером. На экране сделки показывает текущие сделки, историю завершённых и, в редких ресурсах, импорт и экспорт: кому, от кого и сколько ходов осталось.</Description>
+    <Description>В докладе разведки показывает действующие сделки с этим лидером. На экране сделки показывает текущие сделки, историю завершённых и, в редких ресурсах, импорт и экспорт: кому, от кого и сколько ходов осталось. Сообщает об окончании сделки и позволяет одним кликом повторить сделку из истории.</Description>
     <Authors>UI Extender</Authors>
     <CompatibleVersions>1.2,2.0</CompatibleVersions>
     <AffectsSavedGames>0</AffectsSavedGames>
@@ -15,6 +15,9 @@
     <UpdateText id="UIExtender_DealOverview_Text">
       <File>Text/DealOverview_Text.xml</File>
     </UpdateText>
+    <UpdateIcons id="UIExtender_Icons">
+      <File>Data/Icons_Notifications.xml</File>
+    </UpdateIcons>
     <AddUserInterfaces id="UIExtender_DealOverview">
       <Properties>
         <Context>InGame</Context>
@@ -31,5 +34,6 @@
     <File>Scripts/DealRecord.lua</File>
     <File>Scripts/DealArchive.lua</File>
     <File>Text/DealOverview_Text.xml</File>
+    <File>Data/Icons_Notifications.xml</File>
   </Files>
 </Mod>

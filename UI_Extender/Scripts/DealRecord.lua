@@ -26,6 +26,11 @@ DealRecord = DealRecord or {};
 
 DealRecord.PROP = "UIEXT_DEAL_ARCHIVE";
 
+-- The notification about a finished deal. The game draws and activates its user-defined
+-- types without any database change; the mark tells this mod's notifications apart.
+DealRecord.NOTIFY_TYPE = "USER_DEFINED_9";
+DealRecord.NOTIFY_MARK = "UIExtDealEnded";
+
 local function Call(object, method)
 	if object == nil then return nil end
 	local fn = object[method];
@@ -33,6 +38,21 @@ local function Call(object, method)
 	local ok, value = pcall(fn, object);
 	if ok then return value end
 	return nil;
+end
+
+local function Lookup(key)
+	if key == nil or key == "" then return "" end
+	if Locale == nil or Locale.Lookup == nil then return tostring(key) end
+	local ok, text = pcall(Locale.Lookup, key);
+	if ok and text ~= nil then return text end
+	return tostring(key);
+end
+
+local function Format(key, ...)
+	if Locale == nil or Locale.Lookup == nil then return tostring(key) end
+	local ok, text = pcall(Locale.Lookup, key, ...);
+	if ok and text ~= nil then return text end
+	return tostring(key);
 end
 
 function DealRecord.Empty()
@@ -227,6 +247,13 @@ function DealRecord.Kind(rawType)
 		end
 	end
 	return "";
+end
+
+-- The game's item type for a stored kind. Favor is FAVOR in one ruleset and DIPLOMATIC_FAVOR in another.
+function DealRecord.TypeOf(kind)
+	if DealItemTypes == nil or kind == nil then return nil end
+	if kind == "FAVOR" then return DealItemTypes.FAVOR or DealItemTypes.DIPLOMATIC_FAVOR end
+	return DealItemTypes[kind];
 end
 
 local function AgreementNamed(subType, name)
@@ -894,12 +921,13 @@ end
 -- ended. liveIDs must come from a successful read: a failed one would end them all.
 -- A deal that is found gone after its term was already over ended with the term,
 -- which covers deals that finished before this was recorded.
--- Returns how many deals were marked.
+-- Returns how many deals were marked, and the marked deals.
 function DealRecord.MarkEnded(data, liveIDs, now, a, b)
-	if data == nil or data.deals == nil or liveIDs == nil or now == nil then return 0 end
+	if data == nil or data.deals == nil or liveIDs == nil or now == nil then return 0, {} end
 	local pa, pb = nil, nil;
 	if a ~= nil and b ~= nil then pa, pb = DealRecord.Pair(a, b) end
 	local marked = 0;
+	local list = {};
 	for _, deal in ipairs(data.deals) do
 		if deal.ended == nil and deal.id ~= nil and (pa == nil or (deal.a == pa and deal.b == pb))
 			and not DealRecord.IsOneTime(deal) and not liveIDs[tonumber(deal.id)] then
@@ -913,10 +941,113 @@ function DealRecord.MarkEnded(data, liveIDs, now, a, b)
 			if deal.ended ~= nil then
 				deal.ended = math.max(deal.ended, deal.turn or 0);
 				marked = marked + 1;
+				table.insert(list, deal);
 			end
 		end
 	end
-	return marked;
+	return marked, list;
+end
+
+-- True when the deal lasted until its last term ran out, false when it was cut short or had no term.
+function DealRecord.RanItsTerm(deal)
+	local expected = DealRecord.ExpectedEnd(deal);
+	return expected ~= nil and deal.ended ~= nil and deal.ended >= expected;
+end
+
+-- What the stored deal handed over: its own items and the one-time items of the
+-- accepted deal table it came from, which the game had already deleted.
+function DealRecord.FullItems(data, deal)
+	local items, lasting, seen = {}, {}, {};
+	for _, stored in ipairs(deal.items or {}) do
+		table.insert(items, stored);
+		seen[DealRecord.ItemKey(stored)] = true;
+		if not DealRecord.IsInstant(stored) then table.insert(lasting, stored) end
+	end
+	local accepted = #lasting > 0 and DealRecord.AcceptedFor(data, deal.a, deal.b, deal.turn, lasting) or nil;
+	if accepted ~= nil then
+		for _, stored in ipairs(accepted.items) do
+			local key = DealRecord.ItemKey(stored);
+			if DealRecord.IsInstant(stored) and not seen[key] then
+				seen[key] = true;
+				table.insert(items, stored);
+			end
+		end
+	end
+	return items;
+end
+
+local function Shown(name)
+	if name == nil or name == "" then return "" end
+	return Lookup(name);
+end
+
+function DealRecord.ItemLabel(stored)
+	local kind = stored.kind;
+	local amount = stored.amount or 0;
+	if kind == "GOLD" then
+		if (stored.duration or 0) > 0 then
+			return Format("LOC_UIEXT_DEALS_GOLD_PER_TURN", amount);
+		end
+		return Format("LOC_UIEXT_DEALS_GOLD_LUMP", amount);
+	elseif kind == "FAVOR" then
+		return Format("LOC_UIEXT_DEALS_FAVOR", amount);
+	elseif kind == "RESOURCES" then
+		local resource = GameInfo ~= nil and GameInfo.Resources ~= nil and GameInfo.Resources[stored.valueType] or nil;
+		if resource ~= nil then
+			return tostring(amount) .. " [ICON_" .. resource.ResourceType .. "] " .. Lookup(resource.Name);
+		end
+		local name = Shown(stored.name);
+		if name ~= "" then return tostring(amount) .. " " .. name end
+		return tostring(amount);
+	elseif kind == "AGREEMENTS" then
+		if stored.name ~= nil and stored.name ~= "" then return Lookup(stored.name) end
+		local info = GameInfo ~= nil and GameInfo.DiplomaticActions ~= nil and GameInfo.DiplomaticActions[stored.subType] or nil;
+		if info ~= nil then return Lookup(info.Name) end
+		return "";
+	elseif kind == "CITIES" then
+		local name = Shown(stored.name);
+		if name == "" then return Lookup("LOC_UIEXT_DEALS_CITY_UNNAMED") end
+		return Format("LOC_UIEXT_DEALS_CITY", name);
+	elseif kind == "GREATWORK" then
+		local name = "";
+		if GameInfo ~= nil and GameInfo.GreatWorks ~= nil then
+			local info = GameInfo.GreatWorks[stored.valueType];
+			if info ~= nil then name = Lookup(info.Name) end
+		end
+		if name == "" then name = Shown(stored.name) end
+		if name == "" then return Lookup("LOC_UIEXT_DEALS_GREAT_WORK") end
+		return Format("LOC_UIEXT_DEALS_GREAT_WORK_NAMED", name);
+	end
+	return Shown(stored.name);
+end
+
+-- Title and text of the notification that a deal finished, as seen by viewer.
+-- What was handed over at once is marked as one-time; lasting items read as they ran.
+function DealRecord.Notice(deal, items, viewer, partnerName)
+	local gave, got, shared, seenShared = {}, {}, {}, {};
+	for _, item in ipairs(items or {}) do
+		local text = DealRecord.ItemLabel(item);
+		if text ~= "" then
+			if DealRecord.IsInstant(item) then text = Format("LOC_UIEXT_DEALS_ITEM_ONCE", text) end
+			if item.mutual then
+				if not seenShared[text] then
+					seenShared[text] = true;
+					table.insert(shared, text);
+				end
+			elseif item.from == viewer then
+				table.insert(gave, text);
+			else
+				table.insert(got, text);
+			end
+		end
+	end
+	local lines = {};
+	if #shared > 0 then table.insert(lines, Format("LOC_UIEXT_NOTIFY_SHARED", table.concat(shared, ", "))) end
+	if #gave > 0 then table.insert(lines, Format("LOC_UIEXT_NOTIFY_GAVE", table.concat(gave, ", "))) end
+	if #got > 0 then table.insert(lines, Format("LOC_UIEXT_NOTIFY_GOT", table.concat(got, ", "))) end
+	table.insert(lines, Lookup("LOC_UIEXT_NOTIFY_OPEN"));
+	local title = DealRecord.RanItsTerm(deal) and "LOC_UIEXT_NOTIFY_EXPIRED" or "LOC_UIEXT_NOTIFY_ENDED";
+	return Format(title, partnerName), table.concat(lines, "[NEWLINE]");
 end
 
 -- A copy recorded before the game listed the deal, of a deal that is stored under its own id too.

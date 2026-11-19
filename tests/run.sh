@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")/.."
 MOD=UI_Extender
 
-for f in "$MOD"/UI_Extender.modinfo "$MOD"/UI/*.xml "$MOD"/Text/*.xml; do
+for f in "$MOD"/UI_Extender.modinfo "$MOD"/UI/*.xml "$MOD"/Text/*.xml "$MOD"/Data/*.xml; do
 	xmllint --noout "$f"
 done
 echo "ok    xml"

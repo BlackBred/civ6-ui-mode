@@ -50,7 +50,10 @@
 	<Instance Name="DealCard">
 		<Container ID="Top" Size="600,80">
 			<Box ID="Background" Anchor="L,T" Size="parent,parent" Color="255,255,255,12"/>
+			<Box ID="Focus" Anchor="L,T" Size="parent,parent" Color="212,176,92,46" Hidden="1"/>
 			<Box ID="TopRule" Anchor="L,T" Size="parent,1" Color="196,168,92,150"/>
+			<!-- History only: puts the same deal on the table. Labels do not take the mouse, so it gets every click. -->
+			<Button ID="Pick" Anchor="L,T" Size="parent,parent" Hidden="1"/>
 			<Label ID="Header" Anchor="L,T" Offset="10,6" Style="FontFlair14" FontStyle="shadow" Color0="236,220,176,255" Color1="0,0,0,200"/>
 			<Label ID="SharedTitle" Anchor="L,T" Style="FontNormal14" String="LOC_UIEXT_DEALS_SHARED" Color0="190,200,220,255" Color1="0,0,0,180" Hidden="1"/>
 			<Label ID="SharedBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>

@@ -1047,6 +1047,208 @@ test("failing deal API leaves the luxury list untouched", function(w)
 end);
 
 -- ---------------------------------------------------------------------------
+-- A finished deal put back on the table
+-- ---------------------------------------------------------------------------
+-- Silk for spices, 103 gold and 1 gold per turn, finished on turn 40.
+local SILK_FOR_SPICES = "RESOURCES/1/30/0/1/-1//;RESOURCES/1/30/1/3/-1//;GOLD/103/0/1/-1/-1//;GOLD/1/30/1/-1/-1//";
+
+local function TableText(w)
+	local parts = {};
+	for _, item in ipairs(w.working.items) do
+		table.insert(parts, string.format("%s:%s:%s:%s:%s", item.type, tostring(item.from), tostring(item.amount),
+			tostring(item.duration), tostring(item.valueType or -1)));
+	end
+	return table.concat(parts, ",");
+end
+
+local function HistoryReady(w)
+	w.turn = 50;
+	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t40~N\t0";
+	w:Wallet(0).resources[1] = 1;
+	w:Wallet(0).gold = 10;
+	w:Wallet(1).resources[3] = 2;
+	w:Wallet(1).gold = 150;
+	w:Wallet(1).perTurn = 4;
+	w:Load();
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = { Gold(0, 7, 0) } };
+	w:OpenDeal();
+	w.Controls.HistoryTab:Click();
+	eq(#w:Cards(), 1, "history card count");
+	return w:Cards()[1];
+end
+
+local function Logged(w, text)
+	for _, line in ipairs(w.logs) do
+		if line:find(text, 1, true) then return true end
+	end
+	return false;
+end
+
+test("clicking a finished deal puts the same terms on the table", function(w)
+	local card = HistoryReady(w);
+	check(Visible(card.Pick), "history card is not clickable");
+	check(card.Pick.tooltip:find("same terms", 1, true), "tooltip " .. tostring(card.Pick.tooltip));
+	card.Pick:Click();
+	eq(TableText(w), "RESOURCES:0:1:30:1,RESOURCES:1:1:30:3,GOLD:1:103:0:-1,GOLD:1:1:30:-1", "deal table");
+	eq(w.dealViewShows, 1, "the deal screen reads the table again");
+	eq(w.sounds[1], "UI_GreatWorks_Put_Down", "sound");
+end);
+
+test("nothing changes when the treasury no longer holds the lump sum", function(w)
+	local card = HistoryReady(w);
+	w:Wallet(1).gold = 88;
+	card.Pick:Click();
+	eq(TableText(w), "GOLD:0:7:0:-1", "deal table");
+	eq(w.dealViewShows, 0, "deal screen shown again");
+	check(Logged(w, "not available [GOLD103/0<1]"), "reason not logged");
+end);
+
+test("gold per turn over the limit leaves the table as it was", function(w)
+	local card = HistoryReady(w);
+	w:Wallet(1).perTurn = 0;
+	card.Pick:Click();
+	eq(TableText(w), "GOLD:0:7:0:-1", "deal table restored");
+	eq(w.dealViewShows, 0, "deal screen shown again");
+end);
+
+test("nothing changes when a resource is gone or a deal is pending", function(w)
+	local card = HistoryReady(w);
+	w:Wallet(0).resources[1] = 0;
+	card.Pick:Click();
+	eq(TableText(w), "GOLD:0:7:0:-1", "without silk");
+	w:Wallet(0).resources[1] = 1;
+	w.pending = true;
+	card.Pick:Click();
+	eq(TableText(w), "GOLD:0:7:0:-1", "with a pending deal");
+end);
+
+test("agreements go back on the table, a shared one once", function(w)
+	w.turn = 50;
+	w.gameText["LOC_OPEN_BORDERS"] = "Open Borders";
+	w.gameText["LOC_DEFENSIVE_PACT"] = "Defensive Pact";
+	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\t"
+		.. "AGREEMENTS/0/30/0/-1/1//LOC_OPEN_BORDERS;AGREEMENTS/0/30/1/-1/1//LOC_OPEN_BORDERS;"
+		.. "AGREEMENTS/0/30/0/-1/3/m/LOC_DEFENSIVE_PACT;AGREEMENTS/0/30/1/-1/3/m/LOC_DEFENSIVE_PACT\t40~N\t0";
+	for _, from in ipairs({ 0, 1 }) do
+		table.insert(w.possible, { from = from, type = "AGREEMENTS", SubType = 1 });
+		table.insert(w.possible, { from = from, type = "AGREEMENTS", SubType = 3 });
+	end
+	w:Load();
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = {} };
+	w:OpenDeal();
+	w.Controls.HistoryTab:Click();
+	w:Cards()[1].Pick:Click();
+	local parts = {};
+	for _, item in ipairs(w.working.items) do
+		table.insert(parts, item.type .. ":" .. tostring(item.from) .. ":" .. tostring(item.subTypeValue) .. ":" .. tostring(item.duration));
+	end
+	eq(table.concat(parts, ","), "AGREEMENTS:0:1:30,AGREEMENTS:1:1:30,AGREEMENTS:0:3:30", "deal table");
+	w.possible = {};
+	w.working = { a = 0, b = 1, items = {} };
+	w:Cards()[1].Pick:Click();
+	eq(#w.working.items, 0, "an agreement the game no longer offers");
+end);
+
+test("a current deal card is not clickable", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	check(w:Cards()[1].Pick.hidden, "current deal card is clickable");
+end);
+
+-- ---------------------------------------------------------------------------
+-- Notification that a deal finished
+-- ---------------------------------------------------------------------------
+local function RunningSilkForSpices(w, extraArchive)
+	w.turn = 39;
+	w.properties["UIEXT_DEAL_ARCHIVE"] = "D\t1001\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t" .. (extraArchive or "") .. "~N\t0";
+	w:AddDeal(0, 1, { Silk(0, 30, 10), Spice(1, 30, 10), Gold(1, 1, 30, 10) }, 1001);
+	w:LoadGameplay();
+end
+
+local function EndTurn(w, turn)
+	w.deals = {};
+	w.turn = turn;
+	w.Events.TurnBegin(turn);
+end
+
+test("a deal that ran out is announced to the human side with what changed hands", function(w)
+	RunningSilkForSpices(w);
+	EndTurn(w, 40);
+	eq(#w.notifications, 1, "notifications: only the human side");
+	local sent = w.notifications[1];
+	eq(sent.player, 0, "player");
+	eq(sent.type, 509, "user-defined type");
+	eq(sent.params.Message, "Deal with Gandhi expired", "title");
+	eq(sent.params.Summary, "You gave: 1 [ICON_RESOURCE_SILK] Silk[NEWLINE]"
+		.. "You received: 1 [ICON_RESOURCE_SPICES] Spices, 103 [ICON_GOLD] · one-time, 1 [ICON_GOLD] per turn[NEWLINE]"
+		.. "Click to open the deal history with this leader.", "text");
+	eq(sent.params.UIExtPartner, 1, "partner");
+	eq(sent.params.UIExtDealID, 1001, "deal");
+	EndTurn(w, 41);
+	eq(#w.notifications, 1, "announced once");
+end);
+
+test("a deal cut short says it ended, and both humans hear of it", function(w)
+	w:Wallet(1).human = true;
+	RunningSilkForSpices(w);
+	EndTurn(w, 25);
+	eq(#w.notifications, 2, "notifications");
+	eq(w.notifications[1].params.Message, "Deal with Gandhi ended", "first side");
+	eq(w.notifications[2].params.Message, "Deal with Peter ended", "second side");
+	check(w.notifications[2].params.Summary:find("You gave: 1 [ICON_RESOURCE_SPICES] Spices, 103", 1, true),
+		"second side's view: " .. w.notifications[2].params.Summary);
+end);
+
+test("a deal found gone long after its term is not announced", function(w)
+	RunningSilkForSpices(w);
+	EndTurn(w, 60);
+	eq(#w.notifications, 0, "notifications");
+end);
+
+test("clicking the notification opens the deal screen on the history at that deal", function(w)
+	w:Load();
+	w.turn = 39;
+	w.properties["UIEXT_DEAL_ARCHIVE"] = table.concat({
+		"D\t1000\t5\t0\t1\tGOLD/3/20/0/-1/-1//\t25",
+		"D\t1001\t10\t0\t1\t" .. SILK_FOR_SPICES .. "\t",
+		"N\t0",
+	}, "~");
+	w:AddDeal(0, 1, { Silk(0, 30, 10), Spice(1, 30, 10), Gold(1, 1, 30, 10) }, 1001);
+	w:LoadGameplay();
+	EndTurn(w, 40);
+	eq(#w.notifications, 1, "notifications");
+	w.working = { a = 0, b = 1, items = { Gold(0, 7, 0) } };
+	w.LuaEvents.NotificationPanel_UserNotificationActivate(0, 1);
+	eq(#w.requests, 1, "session requests");
+	eq(w.requests[1].b, 1, "with the partner");
+	eq(w.requests[1].kind, "MAKE_DEAL", "a deal session");
+	eq(#w.working.items, 0, "the table starts empty");
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	check(w.Controls.HistoryTab:IsSelected(), "history tab not selected");
+	local cards = w:Cards();
+	eq(#cards, 2, "history card count");
+	check(Visible(cards[1].Focus), "the finished deal is not highlighted");
+	check(cards[2].Focus.hidden, "another deal is highlighted");
+	eq(w.Controls.Scroll.scroll, 0, "scrolled to the deal");
+	w:CloseDiplomacy();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	check(w:Cards()[1].Focus.hidden, "highlight kept after closing");
+end);
+
+test("other notifications are left to the game", function(w)
+	w:Load();
+	w.notifications[1] = { player = 0, type = 509, params = { Message = "Pirates" } };
+	w.LuaEvents.NotificationPanel_UserNotificationActivate(0, 1);
+	eq(#w.requests, 0, "session requests");
+end);
+
+-- ---------------------------------------------------------------------------
 -- Static checks
 -- ---------------------------------------------------------------------------
 local function StaticTests()

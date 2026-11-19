@@ -104,6 +104,7 @@ function Control:GetID() return self.id end
 function Control:GetParent() return self.parent end
 function Control:SetToolTipString(text) self.tooltip = tostring(text or "") end
 function Control:SetColor(color) self.color = color end
+function Control:SetScrollValue(v) self.scroll = v end
 
 function Control:CalculateSize()
 	local h, n = 0, 0;
@@ -196,6 +197,13 @@ function M.new(opts)
 	w.exposed = {};
 	w.working = nil;
 	w.onSend = nil;
+	w.wallets = {};
+	w.possible = {};
+	w.pending = false;
+	w.sessionInfo = {};
+	w.requests = {};
+	w.notifications = {};
+	w.sounds = {};
 
 	local contextSpecs, instanceSpecs = M.ParseContext(ReadFile(w.modDir .. "/UI/DealOverview.xml"));
 	w.instanceSpecs = instanceSpecs;
@@ -209,6 +217,12 @@ function M.new(opts)
 	table.insert(w.playerContainer.children, column);
 
 	w.dealView = NewControl({ id = "DiplomacyDealView", hidden = true });
+	-- The deal screen reads the working deal each time it is shown.
+	w.dealViewShows = 0;
+	function w.dealView:SetHide(v)
+		if self.hidden and not v then w.dealViewShows = w.dealViewShows + 1 end
+		self.hidden = v and true or false;
+	end
 	-- As in the game: the animated parents of the deal banner are Size="parent,parent".
 	w.tradePanelFade = NewControl({ id = "TradePanelFade" });
 	w.tradePanelSlide = NewControl({ id = "TradePanelSlide" });
@@ -258,26 +272,58 @@ function World:AddDeal(a, b, items, id)
 	table.insert(self.deals, { a = a, b = b, items = items, id = id or (1000 + #self.deals) });
 end
 
-local function NewItem(spec)
+local function TypeName(value)
+	for name, v in pairs(DEAL_ITEM_TYPES) do
+		if v == value then return name end
+	end
+	return nil;
+end
+
+-- A player's means, as the game reports them: gold, the per-turn gold limit, favor, resources.
+function World:Wallet(playerID)
+	local wallet = self.wallets[playerID];
+	if wallet == nil then
+		wallet = { gold = 0, perTurn = 0, favor = 0, resources = {}, human = playerID == self.localPlayer, war = {} };
+		self.wallets[playerID] = wallet;
+	end
+	return wallet;
+end
+
+local function NewItem(spec, w)
 	local item = {};
 	function item:GetType() return DEAL_ITEM_TYPES[spec.type] end
 	function item:GetAmount() return spec.amount or 0 end
 	function item:GetDuration() return spec.duration or 0 end
-	function item:GetSubType() return spec.subType and AGREEMENT_TYPES[spec.subType] or -1 end
+	function item:GetSubType()
+		if spec.subTypeValue ~= nil then return spec.subTypeValue end
+		return spec.subType and AGREEMENT_TYPES[spec.subType] or -1;
+	end
 	function item:GetFromPlayerID() return spec.from end
 	function item:GetEnactedTurn() return spec.enacted or -1 end
 	function item:GetValueType() return spec.valueType or -1 end
 	function item:GetValueTypeNameID() return spec.name end
+	function item:IsLocked() return spec.locked == true end
 	if spec.subTypeName ~= nil then
 		function item:GetSubTypeNameID() return spec.subTypeName end
 	end
 	if spec.endTurn ~= nil then
 		function item:GetEndTurn() return spec.endTurn end
 	end
+	function item:SetAmount(v) spec.amount = v end
+	function item:SetDuration(v) spec.duration = v end
+	function item:SetValueType(v) spec.valueType = v end
+	function item:SetSubType(v) spec.subTypeValue = v end
+	function item:GetMaxAmount()
+		local wallet = w:Wallet(spec.from);
+		if spec.type == "FAVOR" or spec.type == "DIPLOMATIC_FAVOR" then return wallet.favor end
+		if (spec.duration or 0) > 0 then return wallet.perTurn end
+		return wallet.gold;
+	end
+	function item:IsValid() return spec.invalid ~= true end
 	return item;
 end
 
-local function NewDeal(spec)
+local function NewDeal(spec, w)
 	local deal = {};
 	function deal:GetID() return spec.id end
 	function deal:Items()
@@ -285,9 +331,15 @@ local function NewDeal(spec)
 		return function()
 			i = i + 1;
 			if spec.items[i] == nil then return nil end
-			return NewItem(spec.items[i]);
+			return NewItem(spec.items[i], w);
 		end
 	end
+	function deal:AddItemOfType(itemType, from)
+		local added = { type = TypeName(itemType), from = from, amount = 0, duration = 0 };
+		table.insert(spec.items, added);
+		return NewItem(added, w);
+	end
+	function deal:Validate() end
 	return deal;
 end
 
@@ -339,10 +391,23 @@ function World:Environment()
 	end
 
 	local players = {};
+	local gamePlayers = {};
 	for id, p in pairs(w.players) do
 		players[id] = {
 			GetLeaderName = function() return p.leader end,
 			GetCivilizationDescription = function() return p.civ end,
+		};
+		local wallet = function() return w:Wallet(id) end;
+		gamePlayers[id] = {
+			IsHuman = function() return wallet().human end,
+			GetFavor = function() return wallet().favor end,
+			GetTreasury = function() return { GetGoldBalance = function() return wallet().gold end } end,
+			GetResources = function()
+				return { GetResourceAmount = function(_, index) return wallet().resources[index] or 0 end };
+			end,
+			GetDiplomacy = function()
+				return { IsAtWarWith = function(_, other) return wallet().war[other] == true end };
+			end,
 		};
 	end
 
@@ -418,14 +483,29 @@ function World:Environment()
 		},
 		DiplomacyManager = {
 			FindOpenSessionID = function(_, other) return w.sessions[other] or -1 end,
+			GetSessionInfo = function(id) return w.sessionInfo[id] end,
+			RequestSession = function(a, b, kind) table.insert(w.requests, { a = a, b = b, kind = kind }) end,
 		},
+		Players = gamePlayers,
+		NotificationManager = {
+			SendNotification = function(player, notifyType, params)
+				table.insert(w.notifications, { player = player, type = notifyType, params = params });
+			end,
+			Find = function(player, id)
+				local sent = w.notifications[id];
+				if sent == nil or sent.player ~= player then return nil end
+				return { GetValue = function(_, key) return sent.params[key] end };
+			end,
+		},
+		NotificationTypes = { USER_DEFINED_9 = 509 },
+		ParameterTypes = { MESSAGE = "Message", SUMMARY = "Summary" },
 		DealManager = {
 			GetPlayerDeals = function(a, b)
 				if w.failDeals then error("GetPlayerDeals failed") end
 				local list = {};
 				for _, d in ipairs(w.deals) do
 					if (d.a == a and d.b == b) or (d.a == b and d.b == a) then
-						table.insert(list, NewDeal(d));
+						table.insert(list, NewDeal(d, w));
 					end
 				end
 				return list;
@@ -433,7 +513,22 @@ function World:Environment()
 			GetWorkingDeal = function(_, a, b)
 				local spec = w.working;
 				if spec == nil or spec.a ~= a or spec.b ~= b then return nil end
-				return NewDeal(spec);
+				return NewDeal(spec, w);
+			end,
+			ClearWorkingDeal = function(_, a, b)
+				w.working = { a = a, b = b, items = {} };
+			end,
+			HasPendingDeal = function() return w.pending end,
+			-- w.possible: { { from, type = "AGREEMENTS", SubType, ForType, IsValid, option = subType }, ... }
+			GetPossibleDealItems = function(from, _, itemType, fourth)
+				local option = type(fourth) == "number" and fourth or nil;
+				local list = {};
+				for _, entry in ipairs(w.possible) do
+					if entry.from == from and DEAL_ITEM_TYPES[entry.type] == itemType and entry.option == option then
+						table.insert(list, entry);
+					end
+				end
+				return list;
 			end,
 			SendWorkingDeal = function(action, a, b)
 				if w.onSend ~= nil then w.onSend(action, a, b) end
@@ -446,6 +541,7 @@ function World:Environment()
 			RequestPlayerOperation = function(player, op, params)
 				table.insert(w.operations, { player = player, op = op, params = params });
 			end,
+			PlaySound = function(name) table.insert(w.sounds, name) end,
 		},
 		PlayerOperations = { EXECUTE_SCRIPT = 1 },
 		DealDirection = { INCOMING = 0, OUTGOING = 1 },

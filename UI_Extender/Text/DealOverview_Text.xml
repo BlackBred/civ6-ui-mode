@@ -25,6 +25,27 @@
     <Replace Tag="LOC_UIEXT_HISTORY_ITEM_UNTIL">
       <Text>{1_Text} · until turn {2_Turn}</Text>
     </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_REPEAT_TIP">
+      <Text>Click to put the same terms on the table. Nothing changes if either side no longer has something from this deal.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_EXPIRED">
+      <Text>Deal with {1_Leader} expired</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_ENDED">
+      <Text>Deal with {1_Leader} ended</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_GAVE">
+      <Text>You gave: {1_Items}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_GOT">
+      <Text>You received: {1_Items}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_SHARED">
+      <Text>Shared: {1_Items}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_OPEN">
+      <Text>Click to open the deal history with this leader.</Text>
+    </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_REPORT">
       <Text>Intel Report: Deals</Text>
     </Replace>
@@ -146,6 +167,27 @@
     </Replace>
     <Replace Tag="LOC_UIEXT_HISTORY_ITEM_UNTIL" Language="ru_RU">
       <Text>{1_Text} · по ход {2_Turn}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_HISTORY_REPEAT_TIP" Language="ru_RU">
+      <Text>Нажмите, чтобы выставить в предложение те же условия. Если у кого-то из сторон чего-то из этой сделки уже нет, ничего не изменится.</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_EXPIRED" Language="ru_RU">
+      <Text>Срок сделки истёк: {1_Leader}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_ENDED" Language="ru_RU">
+      <Text>Сделка прекращена: {1_Leader}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_GAVE" Language="ru_RU">
+      <Text>Вы отдавали: {1_Items}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_GOT" Language="ru_RU">
+      <Text>Вы получали: {1_Items}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_SHARED" Language="ru_RU">
+      <Text>Общее: {1_Items}</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_NOTIFY_OPEN" Language="ru_RU">
+      <Text>Нажмите, чтобы открыть историю сделок с этим лидером.</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_REPORT" Language="ru_RU">
       <Text>Доклад разведки: сделки</Text>

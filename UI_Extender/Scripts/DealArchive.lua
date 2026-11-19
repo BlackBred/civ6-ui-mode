@@ -8,7 +8,7 @@
 -- configuration itself, so a later backfill cannot wipe them.
 --
 -- At the start of every turn it gives recorded copies their game ids and notes
--- the turn each stored deal stopped being listed.
+-- the turn each stored deal stopped being listed, and notifies the human sides of that deal.
 include("DealRecord");
 
 local function Log(message)
@@ -160,18 +160,68 @@ end
 local function MarkEnded(data)
 	local ids = AliveIDs();
 	local turn = CurrentTurn();
-	local marked = 0;
+	local ended = {};
 	for i = 1, #ids do
 		for j = i + 1, #ids do
 			local lives, ok = ReadPair(ids[i], ids[j]);
 			if ok then
 				local liveIDs = {};
 				for _, live in ipairs(lives) do liveIDs[tonumber(live.id)] = true end
-				marked = marked + DealRecord.MarkEnded(data, liveIDs, turn, ids[i], ids[j]);
+				local _, list = DealRecord.MarkEnded(data, liveIDs, turn, ids[i], ids[j]);
+				for _, deal in ipairs(list) do table.insert(ended, deal) end
 			end
 		end
 	end
-	return marked;
+	return ended;
+end
+
+-- ---------------------------------------------------------------------------
+-- Notification that a deal finished, for each human side of it. A deal found gone
+-- long after its term (an old save seen for the first time) is not announced.
+-- ---------------------------------------------------------------------------
+local function IsHuman(playerID)
+	if Players == nil or Players[playerID] == nil then return false end
+	return Call(Players[playerID], "IsHuman") == true;
+end
+
+local function LeaderName(playerID)
+	if PlayerConfigurations == nil or PlayerConfigurations[playerID] == nil then return "" end
+	local key = Call(PlayerConfigurations[playerID], "GetLeaderName");
+	if key == nil or Locale == nil or Locale.Lookup == nil then return tostring(key or "") end
+	local ok, text = pcall(Locale.Lookup, key);
+	if ok and text ~= nil then return text end
+	return tostring(key);
+end
+
+local function Announce(data, deals, now)
+	if NotificationManager == nil or NotificationManager.SendNotification == nil
+		or NotificationTypes == nil or ParameterTypes == nil then return 0 end
+	local notifyType = NotificationTypes[DealRecord.NOTIFY_TYPE];
+	if notifyType == nil then return 0 end
+	local sent = 0;
+	for _, deal in ipairs(deals) do
+		if deal.ended ~= nil and deal.ended >= now - 1 then
+			local items = DealRecord.FullItems(data, deal);
+			for _, pair in ipairs({ { deal.a, deal.b }, { deal.b, deal.a } }) do
+				local viewer, partner = pair[1], pair[2];
+				if IsHuman(viewer) then
+					local message, summary = DealRecord.Notice(deal, items, viewer, LeaderName(partner));
+					local params = {
+						[DealRecord.NOTIFY_MARK] = 1,
+						UIExtPartner = partner,
+						UIExtDealID = deal.id,
+						UIExtTurn = deal.turn,
+					};
+					params[ParameterTypes.MESSAGE] = message;
+					params[ParameterTypes.SUMMARY] = summary;
+					if pcall(NotificationManager.SendNotification, viewer, notifyType, params) then
+						sent = sent + 1;
+					end
+				end
+			end
+		end
+	end
+	return sent;
 end
 
 -- ---------------------------------------------------------------------------
@@ -213,11 +263,13 @@ local function OnTurnBegin()
 		local loaded = Load();
 		local before = DealRecord.EncodeArchive(loaded);
 		local data = DealRecord.Backfill(loaded, AllLive());
-		MarkEnded(data);
+		local ended = MarkEnded(data);
 		if DealRecord.EncodeArchive(data) ~= before then
 			Save(data);
 			Journal("turn -> " .. DealRecord.Changes(loaded, data));
 		end
+		local sent = Announce(data, ended, CurrentTurn());
+		if sent > 0 then Journal("notified " .. tostring(sent)) end
 	end);
 	if not ok then Journal("turn error " .. tostring(err)) end
 end
