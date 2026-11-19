@@ -46,6 +46,14 @@
 			<Label ID="OursBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
 			<Label ID="TheirsTitle" Anchor="L,T" Style="FontNormal14" Color0="230,186,130,255" Color1="0,0,0,200" Hidden="1"/>
 			<Label ID="TheirsBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+			<Label ID="OursTermTitle" Anchor="L,T" Style="FontNormal14" Color0="150,196,230,255" Color1="0,0,0,200" Hidden="1"/>
+			<Label ID="OursOnceTitle" Anchor="L,T" Style="FontNormal14" Color0="150,196,230,255" Color1="0,0,0,200" Hidden="1"/>
+			<Label ID="OursOnceBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+			<Box ID="OursDivider" Anchor="L,T" Size="1,20" Color="196,168,92,150" Hidden="1"/>
+			<Label ID="TheirsTermTitle" Anchor="L,T" Style="FontNormal14" Color0="230,186,130,255" Color1="0,0,0,200" Hidden="1"/>
+			<Label ID="TheirsOnceTitle" Anchor="L,T" Style="FontNormal14" Color0="230,186,130,255" Color1="0,0,0,200" Hidden="1"/>
+			<Label ID="TheirsOnceBody" Anchor="L,T" Style="FontNormal16" Color0="235,235,235,255" Color1="0,0,0,180" Hidden="1"/>
+			<Box ID="TheirsDivider" Anchor="L,T" Size="1,20" Color="196,168,92,150" Hidden="1"/>
 		</Container>
 	</Instance>
 

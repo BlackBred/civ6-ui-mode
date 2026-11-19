@@ -139,6 +139,24 @@ test("timed gold and resource deal", function(w)
 	check(cards[1].SharedBody.hidden, "shared block shown for a one-sided deal");
 end);
 
+test("a previously saved table still shows the lump sum", function(w)
+	w:AddDeal(0, 1, { Silk(1, 30, 10) }, 1001);
+	w.properties["UIEXT_DEAL_ARCHIVE"] = {
+		deals = { ["1"] = {
+			id = "1001", turn = "10", a = "0", b = "1",
+			items = { ["1"] = {
+				kind = "GOLD", amount = "100", duration = "0", from = "0",
+				valueType = "-1", subType = "-1", name = "", alliance = false, mutual = false,
+			} },
+		} },
+	};
+	w:Load();
+	w:OpenDiplomacy(1);
+	local card = w:Cards()[1];
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "lump gold restored from the old table");
+	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "silk");
+end);
+
 test("one-time gold still on the deal is shown", function(w)
 	w:AddDeal(0, 1, { Gold(0, 100, 0) });
 	w:Load();
@@ -146,8 +164,43 @@ test("one-time gold still on the deal is shown", function(w)
 	local cards = w:Cards();
 	eq(#cards, 1, "card count");
 	eq(cards[1].Header.text, "One-time deal", "header");
-	eq(cards[1].OursBody.text, "100 [ICON_GOLD] · one-time", "ours");
+	eq(cards[1].OursOnceBody.text, "100 [ICON_GOLD]", "ours one-time");
+	eq(cards[1].OursOnceTitle.text, "One-time", "one-time heading");
+	check(cards[1].OursTitle.y < cards[1].OursOnceTitle.y, "one-time heading is below you give");
+	check(cards[1].OursTermTitle.hidden, "per-turn heading without a term");
+	check(cards[1].OursBody.hidden, "no lasting items on our side");
 	check(cards[1].TheirsBody.hidden, "their side shown");
+end);
+
+test("one-time items sit in a second column beside a divider", function(w)
+	w:AddDeal(0, 1, { Gold(0, 100, 0), Gold(0, 5, 30, 10), Silk(1, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	local card = w:Cards()[1];
+	check(not card.OursDivider.hidden, "divider shown beside one-time items");
+	eq(card.OursBody.text, "5 [ICON_GOLD] per turn", "lasting column");
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "one-time column");
+	eq(card.OursOnceTitle.text, "One-time", "one-time title");
+	eq(card.OursTermTitle.text, "Per turn", "per-turn title");
+	eq(card.OursTermTitle.y, card.OursOnceTitle.y, "the two headings share a line");
+	check(card.OursTitle.y < card.OursTermTitle.y, "headings are below you give");
+	check(card.OursBody.y > card.OursTermTitle.y, "items are below the headings");
+	check(card.OursOnceBody.x > card.OursBody.x, "one-time column is to the right");
+	check(card.OursDivider.x > card.OursBody.x and card.OursDivider.x < card.OursOnceBody.x, "divider between the columns");
+	check(card.TheirsDivider.hidden, "their side has no one-time items");
+	check(card.TheirsOnceBody.hidden, "their one-time column hidden");
+end);
+
+test("no divider when a side has no one-time items", function(w)
+	w:AddDeal(0, 1, { Gold(0, 5, 30, 10), Silk(1, 30, 10) });
+	w:Load();
+	w:OpenDiplomacy(1);
+	local card = w:Cards()[1];
+	check(card.OursDivider.hidden, "our divider hidden");
+	check(card.TheirsDivider.hidden, "their divider hidden");
+	check(card.OursOnceBody.hidden and card.TheirsOnceBody.hidden, "one-time columns hidden");
+	check(card.OursTermTitle.hidden and card.TheirsTermTitle.hidden, "per-turn headings hidden");
+	eq(card.OursBody.text, "5 [ICON_GOLD] per turn", "ours");
 end);
 
 test("alliance is open-ended and shown once as shared", function(w)
@@ -594,7 +647,7 @@ test("stripped lump gold is restored from the save", function(w)
 	local card = w:Cards()[1];
 	eq(#w:Cards(), 1, "expired archive deal is not a card");
 	eq(card.Header.text, "Turns left: 20 · since turn 10", "one-time gold does not change the countdown");
-	eq(card.OursBody.text, "100 [ICON_GOLD] · one-time", "lump gold");
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "lump gold");
 	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "silk");
 end);
 
@@ -610,8 +663,9 @@ test("city, favor and a great work are shown", function(w)
 	w:OpenDiplomacy(1);
 	local card = w:Cards()[1];
 	eq(card.Header.text, "One-time deal", "header");
-	eq(card.OursBody.text, "25 [ICON_FAVOR] · one-time[NEWLINE]Great Work: Mona Lisa · one-time", "ours");
-	eq(card.TheirsBody.text, "City: Delhi · one-time", "theirs");
+	eq(card.OursOnceBody.text, "25 [ICON_FAVOR][NEWLINE]Great Work: Mona Lisa", "ours");
+	eq(card.TheirsOnceBody.text, "City: Delhi", "theirs");
+	check(card.OursBody.hidden and card.TheirsBody.hidden, "no lasting items");
 end);
 
 -- As in DiplomacyDeals.log: the game enacts the deal, drops the one-time gold,
@@ -627,7 +681,9 @@ local function AcceptGoldForSilk(w)
 end
 
 local function StoredKinds(w)
-	local saved = w.properties["UIEXT_DEAL_ARCHIVE"];
+	local raw = w.properties["UIEXT_DEAL_ARCHIVE"];
+	check(type(raw) == "string", "archive is stored as text");
+	local saved = w.env.DealRecord.Normalize(raw);
 	local kinds = {};
 	for _, item in ipairs(saved.deals[1].items) do
 		table.insert(kinds, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
@@ -646,7 +702,8 @@ test("accepting a deal keeps the lump sum that the game strips", function(w)
 	eq(kinds, "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "stored items");
 	local card = w:Cards()[1];
 	eq(card.Header.text, "Turns left: 30 · since turn 35", "header");
-	eq(card.OursBody.text, "100 [ICON_GOLD] · one-time[NEWLINE]10 [ICON_GOLD] per turn", "ours");
+	eq(card.OursBody.text, "10 [ICON_GOLD] per turn", "ours lasting");
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "ours one-time");
 	eq(card.TheirsBody.text, "1 [ICON_RESOURCE_SILK] Silk", "theirs");
 end);
 
@@ -672,7 +729,8 @@ test("after loading the save both views still show the lump sum", function(w)
 	w:OpenDeal();
 	local card = w:Cards()[1];
 	eq(card.Header.text, "Turns left: 25 · since turn 35", "panel header");
-	eq(card.OursBody.text, "100 [ICON_GOLD] · one-time[NEWLINE]10 [ICON_GOLD] per turn", "panel ours");
+	eq(card.OursBody.text, "10 [ICON_GOLD] per turn", "panel ours lasting");
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "panel ours one-time");
 	w:IntelReport();
 	w.LuaEvents.DiploScene_RefreshTabs(1);
 	local _, panel = w:DealsTab();
@@ -681,6 +739,109 @@ test("after loading the save both views still show the lump sum", function(w)
 	eq(deal.sides[1].title, "You give", "tab ours title");
 	eq(table.concat(deal.sides[1].items, "|"), "100 [ICON_GOLD] · one-time|10 [ICON_GOLD] per turn", "tab ours");
 	eq(table.concat(deal.sides[2].items, "|"), "1 [ICON_RESOURCE_SILK] Silk", "tab theirs");
+end);
+
+test("one-time items show after a load that kept only the configuration", function(w)
+	w:LoadGameplay();
+	w:Load();
+	AcceptGoldForSilk(w);
+	local saved = w.config[w.env.DealRecord.PROP];
+	check(type(saved) == "string", "configuration archive");
+	local stored = w.env.DealRecord.Normalize(saved);
+	local kinds = {};
+	for _, item in ipairs(stored.deals[1].items) do
+		table.insert(kinds, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
+	end
+	table.sort(kinds);
+	eq(table.concat(kinds, ","), "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "configuration keeps the lump sum");
+	w.properties[w.env.DealRecord.PROP] = nil;
+	w.config[w.env.DealRecord.PROP] = nil;
+	w.turn = 40;
+	w:Reload();
+	local dropped = w.env.DealRecord.Normalize(w.properties[w.env.DealRecord.PROP]);
+	local lasting = {};
+	for _, item in ipairs(dropped.deals[1].items) do
+		table.insert(lasting, item.kind .. ":" .. tostring(item.amount) .. ":" .. tostring(item.duration));
+	end
+	table.sort(lasting);
+	eq(table.concat(lasting, ","), "GOLD:10:30,RESOURCES:1:30", "property without the configuration");
+	w.config[w.env.DealRecord.PROP] = saved;
+	w.managers = {};
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	local card = w:Cards()[1];
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "panel ours one-time");
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local deal = TabDeals(w, panel)[1];
+	eq(table.concat(deal.sides[1].items, "|"), "100 [ICON_GOLD] · one-time|10 [ICON_GOLD] per turn", "tab ours");
+end);
+
+-- As in the turn 98 save: the interface heard of deal 1006 before the game listed
+-- it, and the save kept only the configuration value, which held no deal at all.
+test("one-time gold survives a load when the deal is listed only after the event", function(w)
+	w:LoadGameplay();
+	w:Load();
+	w.turn = 98;
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = { Gold(0, 100, 0), Gold(0, 10, 30) } };
+	w:OpenDeal();
+	w.working = nil;
+	w.Events.DiplomacyDealEnacted(0, 1);
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 98) }, 1006);
+	w:CloseDeal();
+	w:CloseDiplomacy();
+	local saved = w.config[w.env.DealRecord.PROP];
+	check(type(saved) == "string" and saved:find("GOLD/100/0", 1, true) ~= nil, "configuration holds the lump sum: " .. tostring(saved));
+	w.properties = {};
+	w.turn = 99;
+	w:Reload();
+	w.managers = {};
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	local card = w:Cards()[1];
+	eq(card.OursOnceBody.text, "100 [ICON_GOLD]", "panel ours one-time");
+	eq(card.OursBody.text, "10 [ICON_GOLD] per turn", "panel ours lasting");
+	w:IntelReport();
+	w.LuaEvents.DiploScene_RefreshTabs(1);
+	local _, panel = w:DealsTab();
+	local deal = TabDeals(w, panel)[1];
+	eq(table.concat(deal.sides[1].items, "|"), "100 [ICON_GOLD] · one-time|10 [ICON_GOLD] per turn", "tab ours");
+end);
+
+test("two deals with one leader in one turn keep their own one-time items after a load", function(w)
+	w:LoadGameplay();
+	w:Load();
+	w.turn = 99;
+	w:OpenDiplomacy(1);
+	w.working = { a = 0, b = 1, items = { Gold(0, 100, 0), Gold(0, 10, 30) } };
+	w:OpenDeal();
+	w.working = nil;
+	w.Events.DiplomacyDealEnacted(0, 1);
+	w:AddDeal(0, 1, { Gold(0, 10, 30, 99) }, 1007);
+	w:CloseDeal();
+	w.working = { a = 0, b = 1, items = { { type = "DIPLOMATIC_FAVOR", from = 0, amount = 1, duration = 0 }, Gold(0, 1, 30) } };
+	w:OpenDeal();
+	w.working = nil;
+	w.Events.DiplomacyDealEnacted(0, 1);
+	w:AddDeal(0, 1, { Gold(0, 1, 30, 99) }, 1009);
+	w:CloseDeal();
+	w:CloseDiplomacy();
+	w.properties = {};
+	w:Reload();
+	w.managers = {};
+	w:Load();
+	w:OpenDiplomacy(1);
+	w:OpenDeal();
+	local byLasting = {};
+	for _, card in ipairs(w:Cards()) do
+		byLasting[card.OursBody.text] = card.OursOnceBody.text;
+	end
+	eq(byLasting["10 [ICON_GOLD] per turn"], "100 [ICON_GOLD]", "first deal");
+	eq(byLasting["1 [ICON_GOLD] per turn"], "1 [ICON_FAVOR]", "second deal");
 end);
 
 test("a deal table left without a deal is not attached to a later one", function(w)

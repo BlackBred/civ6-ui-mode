@@ -55,6 +55,12 @@
     <Replace Tag="LOC_UIEXT_DEALS_ONE_TIME_DEAL">
       <Text>One-time deal</Text>
     </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ONCE">
+      <Text>One-time</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_PER_TURN">
+      <Text>Per turn</Text>
+    </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_SINCE_TURN">
       <Text>since turn {1_Turn}</Text>
     </Replace>
@@ -149,6 +155,12 @@
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_ONE_TIME_DEAL" Language="ru_RU">
       <Text>Разовая сделка</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_ONCE" Language="ru_RU">
+      <Text>Разово</Text>
+    </Replace>
+    <Replace Tag="LOC_UIEXT_DEALS_PER_TURN" Language="ru_RU">
+      <Text>В ход</Text>
     </Replace>
     <Replace Tag="LOC_UIEXT_DEALS_SINCE_TURN" Language="ru_RU">
       <Text>с хода {1_Turn}</Text>

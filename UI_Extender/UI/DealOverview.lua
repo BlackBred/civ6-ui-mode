@@ -208,11 +208,40 @@ local function AddEntry(card, entry, seen, seenShared)
 	end
 end
 
-local function ArchivedDeals()
-	if Game == nil or Game.GetProperty == nil then return {} end
-	local ok, data = pcall(Game.GetProperty, Game, DealRecord.PROP);
-	if not ok or type(data) ~= "table" or type(data.deals) ~= "table" then return {} end
-	return data.deals;
+local function IsNetworkGame()
+	if GameConfiguration == nil or GameConfiguration.IsNetworkMultiplayer == nil then return false end
+	local ok, value = pcall(GameConfiguration.IsNetworkMultiplayer);
+	return ok and value == true;
+end
+
+-- The gameplay property is written too late to be in the save. The configuration
+-- value is written here, in this context, at the moment the deal is accepted.
+local function ReadStored()
+	local property, config = nil, nil;
+	local configOk = false;
+	if Game ~= nil and Game.GetProperty ~= nil then
+		local ok, raw = pcall(Game.GetProperty, Game, DealRecord.PROP);
+		if ok then property = raw end
+	end
+	if GameConfiguration ~= nil and GameConfiguration.GetValue ~= nil then
+		local ok, raw = pcall(GameConfiguration.GetValue, DealRecord.PROP);
+		if ok then
+			config = raw;
+			configOk = true;
+		end
+	end
+	return DealRecord.MergeArchives(property, config), configOk;
+end
+
+local function WriteStored(data, configOk)
+	if IsNetworkGame() then return end
+	local text = DealRecord.EncodeArchive(data);
+	if configOk and GameConfiguration ~= nil and GameConfiguration.SetValue ~= nil then
+		pcall(GameConfiguration.SetValue, DealRecord.PROP, text);
+	end
+	if Game ~= nil and Game.SetProperty ~= nil then
+		pcall(Game.SetProperty, Game, DealRecord.PROP, text);
+	end
 end
 
 local function DealEnactedTurn(deal)
@@ -255,10 +284,11 @@ local function ReadDeal(deal, localID, otherID)
 	end
 
 	local enacted = DealEnactedTurn(deal);
+	local archive = ReadStored();
 	local dealID = Call(deal, "GetID");
 	if dealID ~= nil then
-		for _, archived in ipairs(ArchivedDeals()) do
-			if archived.id == dealID then
+		for _, archived in ipairs(archive.deals) do
+			if tonumber(archived.id) == tonumber(dealID) then
 				addInstants(archived.items);
 				if enacted == nil and type(archived.turn) == "number" and archived.turn > 0 then
 					enacted = archived.turn;
@@ -268,6 +298,11 @@ local function ReadDeal(deal, localID, otherID)
 		end
 	end
 	card.turn = enacted;
+
+	if otherID ~= nil then
+		local accepted = DealRecord.AcceptedFor(archive, localID, otherID, enacted, live);
+		if accepted ~= nil then addInstants(accepted.items) end
+	end
 
 	local snap = otherID ~= nil and m_Snaps[DealRecord.PairKey(localID, otherID)] or nil;
 	if snap ~= nil and snap.accepted and enacted ~= nil and enacted == snap.turn and DealRecord.Covers(snap.items, live) then
@@ -707,11 +742,12 @@ end
 -- ---------------------------------------------------------------------------
 -- Card layout
 -- ---------------------------------------------------------------------------
-local function LineTexts(entries, showTurns)
+-- plainOnce: the one-time column already says "one-time", so no suffix is added.
+local function LineTexts(entries, showTurns, plainOnce)
 	local lines = {};
 	for _, e in ipairs(entries) do
 		if e.instant then
-			table.insert(lines, Format("LOC_UIEXT_DEALS_ITEM_ONCE", e.text));
+			table.insert(lines, plainOnce and e.text or Format("LOC_UIEXT_DEALS_ITEM_ONCE", e.text));
 		elseif showTurns and not e.openEnded then
 			table.insert(lines, Format("LOC_UIEXT_DEALS_ITEM_TURNS", e.text, e.remaining));
 		elseif showTurns then
@@ -756,6 +792,74 @@ local function PlaceBlock(titleLabel, bodyLabel, x, y, width, title, lines)
 	return y + TextHeight(lines, width);
 end
 
+local ONCE_GAP = 12;
+
+local function SplitOnce(entries)
+	local lasting, once = {}, {};
+	for _, e in ipairs(entries) do
+		table.insert(e.instant and once or lasting, e);
+	end
+	return lasting, once;
+end
+
+local function PlaceBody(label, x, y, width, lines)
+	label:SetOffsetVal(x, y);
+	label:SetWrapWidth(width);
+	label:SetText(table.concat(lines, "[NEWLINE]"));
+	label:SetHide(false);
+	return y + TextHeight(lines, width);
+end
+
+-- One side of the card. "You give" stays on its own line. Under it, "Per turn"
+-- and "One-time" share the next line, with a vertical divider between them.
+-- Without one-time items there is no second column and no divider.
+local function PlaceSide(inst, prefix, x, y, width, title, lasting, once, showTurns)
+	local titleLabel, bodyLabel = inst[prefix .. "Title"], inst[prefix .. "Body"];
+	local termTitle = inst[prefix .. "TermTitle"];
+	local onceTitle, onceBody = inst[prefix .. "OnceTitle"], inst[prefix .. "OnceBody"];
+	local divider = inst[prefix .. "Divider"];
+	local lastingLines = LineTexts(lasting, showTurns, false);
+	local onceLines = LineTexts(once, showTurns, true);
+
+	if #onceLines == 0 then
+		termTitle:SetHide(true);
+		onceTitle:SetHide(true);
+		onceBody:SetHide(true);
+		divider:SetHide(true);
+		return PlaceBlock(titleLabel, bodyLabel, x, y, width, title, lastingLines);
+	end
+
+	titleLabel:SetOffsetVal(x, y);
+	titleLabel:SetText(title);
+	titleLabel:SetHide(false);
+	local headY = y + 20;
+
+	local leftW = math.floor((width - ONCE_GAP) / 2);
+	local rightX = x + leftW + ONCE_GAP;
+	local rightW = width - leftW - ONCE_GAP;
+	local bodyY = headY + 20;
+	local yLeft = bodyY;
+	if #lastingLines == 0 then
+		termTitle:SetHide(true);
+		bodyLabel:SetHide(true);
+	else
+		termTitle:SetOffsetVal(x, headY);
+		termTitle:SetText(Lookup("LOC_UIEXT_DEALS_PER_TURN"));
+		termTitle:SetHide(false);
+		yLeft = PlaceBody(bodyLabel, x, bodyY, leftW, lastingLines);
+	end
+	onceTitle:SetOffsetVal(rightX, headY);
+	onceTitle:SetText(Lookup("LOC_UIEXT_DEALS_ONCE"));
+	onceTitle:SetHide(false);
+	local yRight = PlaceBody(onceBody, rightX, bodyY, rightW, onceLines);
+
+	local bottom = math.max(yLeft, yRight);
+	divider:SetOffsetVal(x + leftW + math.floor(ONCE_GAP / 2), headY);
+	divider:SetSizeVal(1, bottom - headY);
+	divider:SetHide(false);
+	return bottom;
+end
+
 local function PopulateCard(inst, card, leaderName)
 	local header, showTurns = CardTiming(card);
 	inst.Header:SetText(header);
@@ -768,15 +872,15 @@ local function PopulateCard(inst, card, leaderName)
 	local colWidth = math.floor((fullWidth - CARD_PADDING) / 2);
 	local leftX = CARD_PADDING;
 	local rightX = CARD_PADDING * 2 + colWidth;
-	local ours = LineTexts(card.ours, showTurns);
-	local theirs = LineTexts(card.theirs, showTurns);
+	local oursLasting, oursOnce = SplitOnce(card.ours);
+	local theirsLasting, theirsOnce = SplitOnce(card.theirs);
 	local oursTitle = Lookup("LOC_UIEXT_DEALS_WE_GIVE");
 	local theirsTitle = Format("LOC_UIEXT_DEALS_THEY_GIVE", leaderName);
 
 	local theirsX = rightX;
-	if #ours == 0 then theirsX = leftX end
-	local yOurs = PlaceBlock(inst.OursTitle, inst.OursBody, leftX, y, colWidth, oursTitle, ours);
-	local yTheirs = PlaceBlock(inst.TheirsTitle, inst.TheirsBody, theirsX, y, colWidth, theirsTitle, theirs);
+	if #card.ours == 0 then theirsX = leftX end
+	local yOurs = PlaceSide(inst, "Ours", leftX, y, colWidth, oursTitle, oursLasting, oursOnce, showTurns);
+	local yTheirs = PlaceSide(inst, "Theirs", theirsX, y, colWidth, theirsTitle, theirsLasting, theirsOnce, showTurns);
 	y = math.max(yOurs, yTheirs);
 
 	local height = y + 8;
@@ -1156,8 +1260,8 @@ end
 -- ---------------------------------------------------------------------------
 -- What was on the deal table. The game deletes one-time items while it enacts
 -- the deal, before any event reaches this context, so the table is read while
--- the deal screen is open. When the deal is enacted, the last contents seen are
--- written into the save by the gameplay script.
+-- the deal screen is open. When the deal is enacted, that copy is written into
+-- the save from here, attached to the deal id the game just created.
 -- ---------------------------------------------------------------------------
 local function WorkingItems(localID, otherID)
 	if DealManager == nil or DealManager.GetWorkingDeal == nil or DealDirection == nil then return {} end
@@ -1192,20 +1296,55 @@ local function WatchDealTable()
 	};
 end
 
-local function IsNetworkGame()
-	if GameConfiguration == nil or GameConfiguration.IsNetworkMultiplayer == nil then return false end
-	local ok, value = pcall(GameConfiguration.IsNetworkMultiplayer);
-	return ok and value == true;
+local function ItemsOfDeal(deal)
+	local list = {};
+	if deal == nil or deal.Items == nil then return list end
+	local ok, iter, state, first = pcall(deal.Items, deal);
+	if not ok or iter == nil then return list end
+	for item in iter, state, first do
+		local stored = DealRecord.FromItem(item);
+		if stored ~= nil then table.insert(list, stored) end
+	end
+	return list;
+end
+
+local function LivesForPair(a, b)
+	local list = {};
+	if DealManager == nil or DealManager.GetPlayerDeals == nil then return list end
+	local ok, deals = pcall(DealManager.GetPlayerDeals, a, b);
+	if not ok or type(deals) ~= "table" then return list end
+	local now = 0;
+	if Game ~= nil and Game.GetCurrentGameTurn ~= nil then
+		local turnOk, turn = pcall(Game.GetCurrentGameTurn);
+		if turnOk and type(turn) == "number" then now = turn end
+	end
+	for _, deal in ipairs(deals) do
+		local id = Call(deal, "GetID");
+		if id ~= nil then
+			table.insert(list, {
+				id = id,
+				a = a,
+				b = b,
+				turn = DealEnactedTurn(deal) or now,
+				items = ItemsOfDeal(deal),
+			});
+		end
+	end
+	return list;
 end
 
 local function PublishSnapshot(snap)
 	m_Snaps[snap.key] = { turn = snap.turn, items = snap.items, accepted = true };
+	local data, configOk = ReadStored();
+	DealRecord.AddAccepted(data, snap);
+	data = DealRecord.Remember(data, LivesForPair(snap.a, snap.b), snap.items, snap.turn);
+	WriteStored(data, configOk);
 	local payload = {
 		a = snap.a,
 		b = snap.b,
 		turn = snap.turn,
 		accepted = 1,
-		items = DealRecord.EncodeItems(snap.items),
+		uiextItems = DealRecord.EncodeItems(snap.items),
 	};
 	-- In a network game only the player operation may write: it runs on every machine.
 	if not IsNetworkGame() and ExposedMembers ~= nil and ExposedMembers.UIExt ~= nil and ExposedMembers.UIExt.RecordSnapshot ~= nil then

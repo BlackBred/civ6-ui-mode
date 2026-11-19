@@ -1,11 +1,11 @@
--- Writes concluded deals into the save. Runs as a gameplay script: SetProperty
--- from the interface is ignored and would desync a multiplayer game, because
--- each machine has a different local player.
+-- Writes concluded deals into the save. The interface also stores the same text
+-- in GameConfiguration at the moment of the deal: SetProperty from that context
+-- does not reach the save, and the player operation arrives after one-time items
+-- are already gone.
 --
--- Every machine records the same deals. One-time items are already gone by the
--- time DiplomacyDealEnacted runs, so the interface also hands over the working
--- deal it saw at Propose or Accept. That call is synchronous (ExposedMembers);
--- the player operation is the same write again in case the direct call missed.
+-- This script still records every machine's deals into the game property. On load
+-- it keeps one-time items the configuration already has, and it never writes the
+-- configuration itself, so a later backfill cannot wipe them.
 include("DealRecord");
 
 local function Log(message)
@@ -29,15 +29,25 @@ local function CurrentTurn()
 end
 
 local function Load()
-	if Game == nil or Game.GetProperty == nil then return DealRecord.Empty() end
-	local ok, data = pcall(Game.GetProperty, Game, DealRecord.PROP);
-	if not ok then return DealRecord.Empty() end
-	return DealRecord.Normalize(data);
+	local property = nil;
+	if Game ~= nil and Game.GetProperty ~= nil then
+		local ok, raw = pcall(Game.GetProperty, Game, DealRecord.PROP);
+		if ok then property = raw end
+	end
+	local config = nil;
+	if GameConfiguration ~= nil and GameConfiguration.GetValue ~= nil then
+		local ok, raw = pcall(GameConfiguration.GetValue, DealRecord.PROP);
+		if ok then config = raw end
+	end
+	return DealRecord.MergeArchives(property, config);
 end
 
 local function Save(data)
 	if Game == nil or Game.SetProperty == nil then return end
-	pcall(Game.SetProperty, Game, DealRecord.PROP, data);
+	-- A string is what the game actually writes into the save. A table does not come back.
+	-- The configuration copy is left to the interface: overwriting it here would
+	-- replace a complete archive with whatever this script managed to see.
+	pcall(Game.SetProperty, Game, DealRecord.PROP, DealRecord.EncodeArchive(data));
 end
 
 local function EachItem(deal, fn)
@@ -152,7 +162,8 @@ local function OnSnapshotPayload(payload)
 		b = payload.b,
 		turn = payload.turn,
 		accepted = payload.accepted,
-		items = DealRecord.DecodeItems(payload.items),
+		-- `items` is a name the operation itself uses, so the text rides as uiextItems.
+		items = DealRecord.DecodeItems(payload.uiextItems or payload.items),
 	});
 	Save(data);
 	if #data.deals ~= before then

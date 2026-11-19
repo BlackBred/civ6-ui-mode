@@ -138,6 +138,32 @@ test("a deal the game already deleted is kept from the acceptance", function()
 	check(not R.HasMiss(data, 0, 1, 12), "miss still open");
 end);
 
+test("a snapshot attaches only to the live deal it covers", function()
+	local function lastingGold(amount, from)
+		local item = Gold(amount, from);
+		item.duration = 30;
+		return item;
+	end
+	local favor = {
+		kind = "DIPLOMATIC_FAVOR", amount = 1, duration = 0, from = 0,
+		valueType = -1, subType = -1, name = "", alliance = false, mutual = false,
+	};
+	local lives = {
+		{ id = 1007, a = 0, b = 3, turn = 99, items = { lastingGold(10, 0), Silk(3, 30) } },
+		{ id = 1009, a = 0, b = 3, turn = 99, items = { lastingGold(1, 0) } },
+	};
+	local data = R.Remember(R.Empty(), lives, { Gold(100, 0), lastingGold(10, 0), Silk(3, 30) }, 99);
+	data = R.Remember(data, lives, { favor, lastingGold(1, 0) }, 99);
+	eq(#data.deals, 2, "deals");
+	local first, second = nil, nil;
+	for _, deal in ipairs(data.deals) do
+		if deal.id == 1007 then first = deal end
+		if deal.id == 1009 then second = deal end
+	end
+	eq(Kinds(first), "GOLD:100:0,GOLD:10:30,RESOURCES:1:30", "first deal");
+	eq(Kinds(second), "DIPLOMATIC_FAVOR:1:0,GOLD:1:30", "second deal");
+end);
+
 test("backfill adds current deals and does not duplicate them", function()
 	local live = { { id = 1001, a = 2, b = 0, turn = 8, items = { Silk(2, 30) } } };
 	local data = R.Backfill(R.Empty(), live);
@@ -145,6 +171,28 @@ test("backfill adds current deals and does not duplicate them", function()
 	eq(#data.deals, 1, "deal count");
 	eq(data.deals[1].a, 0, "pair order");
 	eq(Kinds(data.deals[1]), "RESOURCES:1:30", "items");
+end);
+
+test("the archive round-trips as text, and a table with text keys still reads", function()
+	local data = R.OnEnacted(R.Empty(), {
+		a = 0, b = 3, turn = 35,
+		live = { { id = 1001, a = 0, b = 3, turn = 35, items = { Silk(3, 30) } } },
+		working = { Silk(3, 30), Gold(100, 0) },
+	});
+	local text = R.EncodeArchive(data);
+	check(type(text) == "string", "encoded archive");
+	check(text:find("\n", 1, true) == nil, "archive is a single line");
+	local back = R.Normalize(text);
+	eq(#back.deals, 1, "deal count");
+	eq(Kinds(back.deals[1]), "GOLD:100:0,RESOURCES:1:30", "items");
+	local fromLines = R.Normalize(text:gsub("~", "\n"));
+	eq(Kinds(fromLines.deals[1]), "GOLD:100:0,RESOURCES:1:30", "newline archive still reads");
+
+	local legacy = R.Normalize({
+		deals = { ["1"] = { id = "1001", turn = "35", a = "0", b = "3", items = { ["1"] = Gold(100, 0) } } },
+	});
+	eq(#legacy.deals, 1, "legacy deal count");
+	eq(Kinds(legacy.deals[1]), "GOLD:100:0", "legacy items");
 end);
 
 test("the gameplay script records a deal that is already in the game", function()
@@ -157,7 +205,8 @@ test("the gameplay script records a deal that is already in the game", function(
 		{ type = "RESOURCES", from = 1, amount = 1, duration = 30, enacted = 35, valueType = 1 },
 	}, 1001);
 	w:LoadGameplay();
-	local data = w.properties[R.PROP];
+	check(type(w.properties[R.PROP]) == "string", "archive is stored as text");
+	local data = R.Normalize(w.properties[R.PROP]);
 	eq(#data.deals, 1, "backfill");
 	eq(data.deals[1].id, 1001, "id");
 	eq(#data.deals[1].items, 2, "items");
@@ -166,6 +215,7 @@ test("the gameplay script records a deal that is already in the game", function(
 	}, 1002);
 	w.turn = 36;
 	w.Events.DiplomacyDealEnacted(0, 1);
+	data = R.Normalize(w.properties[R.PROP]);
 	eq(#data.deals, 2, "second deal");
 	eq(data.deals[2].id, 1002, "new id");
 end);

@@ -191,6 +191,7 @@ function M.new(opts)
 	w.gameText = opts.gameText or {};
 	w.failDeals = false;
 	w.properties = {};
+	w.config = {};
 	w.operations = {};
 	w.exposed = {};
 	w.working = nil;
@@ -395,6 +396,11 @@ function World:Environment()
 			GetCurrentGameTurn = function() return w.turn end,
 			GetProperty = function(_, key) return w.properties[key] end,
 			SetProperty = function(_, key, value) w.properties[key] = value end,
+		},
+		GameConfiguration = {
+			GetValue = function(key) return w.config[key] end,
+			SetValue = function(key, value) w.config[key] = value end,
+			IsNetworkMultiplayer = function() return false end,
 		},
 		PlayerConfigurations = players,
 		PlayerManager = {
